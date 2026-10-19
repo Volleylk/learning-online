@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>学成在线 · AI 学习助手</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">学</span>
+        <div>
+          <h1>学成在线 · AI 学习助手</h1>
+          <p class="subtitle">通用对话 · 讲义知识问答 · 智能课程推荐</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="btn-new" class="btn btn-ghost" title="开启新对话">＋ 新对话</button>
+      </div>
+    </header>
+
+    <main class="chat-wrap">
+      <aside id="session-sidebar" class="session-sidebar">
+        <div class="sidebar-head">
+          <span>历史会话</span>
+          <button id="btn-refresh" class="btn btn-ghost btn-sm" title="刷新列表">↻</button>
+        </div>
+        <ul id="session-list" class="session-list"></ul>
+      </aside>
+      <div class="chat-main">
+        <div id="chat" class="chat"></div>
+        <form id="chat-form" class="input-bar">
+          <input id="input" type="text" placeholder="输入你的问题，Enter 发送" autocomplete="off" />
+          <button type="submit" class="btn btn-primary" id="btn-send">发送</button>
+        </form>
+      </div>
+    </main>
+
+    <footer class="footer">
+      登录态经共享 JWT 校验 · 讲义知识库由 RAG 驱动 · 课程推荐直达门户详情页
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

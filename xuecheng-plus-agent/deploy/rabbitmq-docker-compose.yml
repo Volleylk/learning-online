@@ -1,0 +1,24 @@
+# 标准 RabbitMQ 部署（在虚拟机 192.168.101.65 上执行）
+# 解决：现有 RabbitMQ 管理台为定制 UAA 版本、控制台不可用、凭据未知的问题。
+#
+# 用法（在虚拟机/容器宿主上）：
+#   1. 停掉旧容器：  docker ps | grep rabbit
+#                    docker stop <旧容器名> && docker rm <旧容器名>
+#   2. 启动标准版：  docker compose -f rabbitmq-docker-compose.yml up -d
+#   3. 验证：        http://192.168.101.65:15672  账号 rabbitmq / rabbitmq
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # 管理台
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: rabbitmq
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+volumes:
+  rabbitmq_data:

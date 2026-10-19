@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: media-service
+  cloud:
+    nacos:
+      server-addr: 192.168.101.65:8848
+      discovery:
+        namespace: ${spring.profiles.active}
+        group: xuecheng-plus-project
+      config:
+        namespace: ${spring.profiles.active}
+        group: xuecheng-plus-project
+        file-extension: yaml
+        refresh-enabled: true
+      shared-configs:
+        - data-id: logging-${spring.profiles.active}.yaml
+          group: xuecheng-plus-common
+          refresh: true
+
+#profiles默认为dev
+  profiles:
+    active: dev
+
+  # RabbitMQ（与 AI 服务 agent-service 共用同一实例）
+  rabbitmq:
+    host: 192.168.101.65
+    port: 5672
+    username: rabbitmq
+    password: rabbitmq
+    virtual-host: /
+    # 生产者确认：correlated 模式下每条消息携带 CorrelationData，
+    # broker 确认送达交换机会回调 ConfirmCallback（未确认/失败可感知，避免消息静默丢失）
+    publisher-confirm-type: correlated
+
+
+
