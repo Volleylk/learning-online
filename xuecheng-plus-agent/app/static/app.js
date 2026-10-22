@@ -78,7 +78,12 @@
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    bubble.textContent = text;
+    if (role === "assistant") {
+      bubble.classList.add("md");
+      bubble.innerHTML = renderMarkdown(text);
+    } else {
+      bubble.textContent = text;
+    }
 
     wrap.appendChild(avatar);
     wrap.appendChild(bubble);
@@ -147,6 +152,175 @@
       .replace(/"/g, "&quot;");
   }
 
+  // ---------- 轻量 Markdown 渲染 ----------
+  // 只渲染白名单子集（表格/标题/列表/代码块/引用/加粗/行内代码/链接/分隔线）。
+  // 原文一律先 esc() 转义，再注入白名单标签，杜绝 XSS；流式半截内容容错渲染。
+
+  function mdInline(text) {
+    // 输入已转义，按顺序做行内替换
+    let s = text;
+    // 1) 先保护行内代码（内部的 ** 等不被二次处理）
+    const codes = [];
+    s = s.replace(/`([^`]+)`/g, function (m, c) {
+      codes.push(c);
+      return "\u0000" + (codes.length - 1) + "\u0000";
+    });
+    // 2) 加粗 **text**
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    // 3) 链接 [text](url)（仅允许 http/https）
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, t, u) {
+      return /^https?:\/\//i.test(u)
+        ? '<a href="' + u + '" target="_blank" rel="noopener">' + t + "</a>"
+        : t;
+    });
+    // 4) 还原行内代码
+    s = s.replace(/\u0000(\d+)\u0000/g, function (m, i) {
+      return "<code>" + codes[+i] + "</code>";
+    });
+    return s;
+  }
+
+  function isTableRow(line) {
+    return /^\s*\|.*\|\s*$/.test(line);
+  }
+  function isTableSep(line) {
+    return /^\s*\|?\s*:?-+:?(\s*\|?\s*:?-+:?)*\|?\s*$/.test(line.trim()) && /\s-/.test(line.replace(/\|/g, " "));
+  }
+  function parseRow(line) {
+    const t = line.trim().replace(/^\||\|$/g, "");
+    return t.split("|").map(function (c) {
+      const v = c.trim();
+      return v ? mdInline(esc(v)) : "";
+    });
+  }
+
+  function renderMarkdown(text) {
+    if (!text) return "";
+    const lines = String(text).split("\n");
+    const out = [];
+    let i = 0;
+    let inCode = false;
+    let codeBuf = [];
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // 代码块 ``` ... ```
+      if (/^```/.test(line.trim())) {
+        if (inCode) {
+          out.push("<pre><code>" + esc(codeBuf.join("\n")) + "</code></pre>");
+          codeBuf = [];
+          inCode = false;
+        } else {
+          inCode = true;
+        }
+        i++;
+        continue;
+      }
+      if (inCode) {
+        codeBuf.push(line);
+        i++;
+        continue;
+      }
+
+      // 表格：当前行是分隔行且上一行是表头行
+      if (isTableSep(line) && i > 0 && isTableRow(lines[i - 1])) {
+        // 上一行表头可能已被当作普通段落输出，先移除，避免重复
+        const headerPara = "<p>" + mdInline(esc(lines[i - 1])) + "</p>";
+        if (out.length && out[out.length - 1] === headerPara) {
+          out.pop();
+        }
+        const header = parseRow(lines[i - 1]);
+        i++; // 跳过分隔行
+        const rows = [];
+        while (i < lines.length && isTableRow(lines[i])) {
+          rows.push(parseRow(lines[i]));
+          i++;
+        }
+        out.push(buildTable(header, rows));
+        continue;
+      }
+
+      // 标题
+      const hm = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (hm) {
+        const level = hm[1].length >= 3 ? 4 : 3; // ## → h3, ###/#### → h4
+        out.push("<h" + level + ">" + mdInline(esc(hm[2])) + "</h" + level + ">");
+        i++;
+        continue;
+      }
+
+      // 引用 > ...（合并连续引用行）
+      if (/^>\s?/.test(line)) {
+        const q = [];
+        while (i < lines.length && /^>\s?/.test(lines[i])) {
+          q.push(mdInline(esc(lines[i].replace(/^>\s?/, ""))));
+          i++;
+        }
+        out.push("<blockquote>" + q.join("<br>") + "</blockquote>");
+        continue;
+      }
+
+      // 无序列表 - / *
+      if (/^[-*]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+          items.push("<li>" + mdInline(esc(lines[i].replace(/^[-*]\s+/, ""))) + "</li>");
+          i++;
+        }
+        out.push("<ul>" + items.join("") + "</ul>");
+        continue;
+      }
+
+      // 有序列表 1. / 1、
+      if (/^\d+[.、]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\d+[.、]\s+/.test(lines[i])) {
+          items.push("<li>" + mdInline(esc(lines[i].replace(/^\d+[.、]\s+/, ""))) + "</li>");
+          i++;
+        }
+        out.push("<ol>" + items.join("") + "</ol>");
+        continue;
+      }
+
+      // 分隔线
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+        out.push("<hr>");
+        i++;
+        continue;
+      }
+
+      // 空行
+      if (/^\s*$/.test(line)) {
+        i++;
+        continue;
+      }
+
+      // 普通段落（流式半截表格行/未闭合标记原样显示）
+      out.push("<p>" + mdInline(esc(line)) + "</p>");
+      i++;
+    }
+
+    if (inCode) {
+      out.push("<pre><code>" + esc(codeBuf.join("\n")) + "</code></pre>");
+    }
+    return out.join("\n");
+  }
+
+  function buildTable(header, rows) {
+    const thead =
+      "<thead><tr>" + header.map(function (h) { return "<th>" + h + "</th>"; }).join("") + "</tr></thead>";
+    const tbody =
+      "<tbody>" +
+      rows
+        .map(function (r) {
+          return "<tr>" + r.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>";
+        })
+        .join("") +
+      "</tbody>";
+    return '<div class="md-table-wrap"><table>' + thead + tbody + "</table></div>";
+  }
+
   function scrollBottom() {
     chat.scrollTop = chat.scrollHeight;
   }
@@ -201,7 +375,9 @@
       sessionId = sid;
       localStorage.setItem("xc_session_id", sid);
       chat.innerHTML = "";
-      msgs.forEach((m) => addMessage(m.role === "user" ? "user" : "assistant", m.content));
+      msgs.forEach((m) =>
+        addMessage(m.role === "user" ? "user" : "assistant", m.content)
+      );
       if (!msgs.length) renderWelcome();
       scrollBottom();
       refreshActive();
@@ -289,7 +465,8 @@
           } else if (ev.type === "answer") {
             gotAnswer = true;
             full += ev.delta;
-            bubble.textContent = full;
+            bubble.classList.add("md");
+            bubble.innerHTML = renderMarkdown(full);
             scrollBottom();
           } else if (ev.type === "sources") {
             renderSources(wrap, ev.sources);
@@ -306,7 +483,12 @@
         }
       }
       bubble.classList.remove("streaming");
-      bubble.textContent = full || "(无回答)";
+      if (full) {
+        bubble.classList.add("md");
+        bubble.innerHTML = renderMarkdown(full);
+      } else {
+        bubble.textContent = "(无回答)";
+      }
       scrollBottom();
     } catch (e) {
       bubble.classList.remove("streaming");

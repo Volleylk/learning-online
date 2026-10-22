@@ -93,6 +93,52 @@ body {
   padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.75; word-break: break-word;
   white-space: pre-wrap;
 }
+/* Markdown 渲染模式：由 HTML 结构控制换行，不再依赖 pre-wrap */
+.bubble.md { white-space: normal; }
+
+/* ---------- Markdown 内容样式 ---------- */
+.bubble.md h3, .bubble.md h4 { margin: 14px 0 6px; line-height: 1.4; }
+.bubble.md h3:first-child, .bubble.md h4:first-child { margin-top: 0; }
+.bubble.md h3 { font-size: 16px; }
+.bubble.md h4 { font-size: 14.5px; }
+.bubble.md p { margin: 6px 0; }
+.bubble.md ul, .bubble.md ol { margin: 6px 0 6px 22px; padding: 0; }
+.bubble.md li { margin: 3px 0; }
+.bubble.md blockquote {
+  margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--primary);
+  background: #f8fafc; color: var(--muted); border-radius: 0 8px 8px 0;
+}
+.bubble.md code {
+  background: #f1f5f9; border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 5px; font-size: 12.5px; font-family: Consolas, "Courier New", monospace;
+}
+.bubble.md pre {
+  background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 10px 12px;
+  margin: 8px 0; overflow-x: auto;
+}
+.bubble.md pre code {
+  background: transparent; border: none; padding: 0; font-size: 12.5px;
+  color: inherit; line-height: 1.6; display: block;
+}
+.bubble.md a { color: var(--primary); text-decoration: none; }
+.bubble.md a:hover { text-decoration: underline; }
+.bubble.md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+/* 表格：支持横向滚动，避免撑破气泡 */
+.bubble.md .md-table-wrap { overflow-x: auto; margin: 8px 0; }
+.bubble.md table {
+  border-collapse: collapse; min-width: 40%; font-size: 13px; line-height: 1.5;
+}
+.bubble.md th, .bubble.md td {
+  border: 1px solid var(--border); padding: 6px 10px; text-align: left; word-break: break-word;
+}
+.bubble.md th {
+  background: #f1f5f9; font-weight: 600; white-space: nowrap;
+}
+.bubble.md tbody tr:nth-child(even) { background: #f8fafc; }
+.bubble.md tbody tr:hover { background: #eef2f7; }
+.bubble.md .md-table-wrap::-webkit-scrollbar { height: 6px; }
+.bubble.md .md-table-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 .msg.user .bubble { background: var(--user-bubble); color: #fff; border-top-right-radius: 4px; }
 .msg.assistant .bubble { background: var(--assistant-bubble); border: 1px solid var(--border); border-top-left-radius: 4px; }
 
