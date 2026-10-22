@@ -83,10 +83,9 @@ sequenceDiagram
 
 要点：
 
-- **工具动态挂载**：工具不是全局单例，而是按"请求级 token"动态构造，token 为空则不挂载，避免串号与污染。
+- **工具请求级上下文**：工具固定注册（LangGraph 构建期），请求级 user_id / JWT 通过 contextvar 注入，避免全局单例串号与污染。
 - **JWT 透传**：agent 不解密 Java 侧业务接口的完整语义，仅把请求携带的原始 JWT 原样透传给网关，由网关负责身份解析。
 - **结果兼容**：工具层兼容 PageResult 的 `records / items / list / data` 多种字段形态，非 200 响应转为可读错误文案回传 LLM。
-- **工具参数兼容**：百炼 DashScope 兼容层对单参数工具返回 `__arg1`，工具层用 `_first_str_arg` 做通用键名兜底。
 
 ### 2.3 登录认证与用户画像
 
@@ -162,13 +161,13 @@ sequenceDiagram
 | --- | --- | --- |
 | Spring Boot 2.3.7 无 `setPublisherConfirmType` | 编译报错 | 重写 `RabbitTemplate` Bean 启用 confirm |
 | Chroma 1.5.9 低维向量 | cosine distance 全为 1.0，召回失真 | 加阈值过滤 + file_hash 去重 |
-| 百炼工具参数名 `__arg1` | 单参数工具取不到 query | `_first_str_arg` 通用键名兜底 |
+| astream_events v3 文本增量事件 | 流式回答取不到文本 | 增量在 `content-block-delta` 的 `delta.type == "text-delta"` |
 | 门户 JWT 无统一 ID 字段 | 早期格式解析失败 | 兼容 sub/user_id/uid/userId + user_name JSON |
 | `update_time` 时区偏差 | 入库时间差 8 小时 | 统一 Asia/Shanghai |
 | 命令行 Maven 编译 Lombok 报错 | 本机 IDEA 外编译失败 | Java 改动在 IDEA 内编译运行 |
 
 ## 6. 扩展指引
 
-- **新增工具**：在 `xuecheng-plus-agent/app/tools.py` 定义工具函数 + schema，并在 `agent.py` 按请求挂载。
+- **新增工具**：在 `xuecheng-plus-agent/app/tools.py` 定义 `@tool` 函数 + schema，在 `agent.py` 固定注册；请求级数据经 contextvar 注入。
 - **新增转发路由**：在 `app/routers/` 新增路由，走网关（63010）或直连 Java 服务，JWT 透传。
 - **新增业务表**：Java 侧 service 建表 + MyBatis-Plus 实体；agent 侧仅通过 HTTP 访问，不直接依赖表结构。

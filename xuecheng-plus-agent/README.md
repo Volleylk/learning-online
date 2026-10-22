@@ -2,7 +2,7 @@
 
 门户 AI 学习助手：支持通用对话、全站公开课程讲义知识问答（RAG）、Agent 主动推荐课程（回答末尾课程卡片直达详情页）、"我的课程"查询（JWT 透传网关）、长期记忆个性化问答。
 
-> 技术栈：FastAPI + LangChain 0.3（AgentExecutor）+ 阿里百炼（千问 qwen-plus / text-embedding-v3）
+> 技术栈：**FastAPI + LangChain 1.x（LangGraph：create_agent + astream_events v3）+ 阿里百炼（qwen3.8-max / text-embedding-v3）**
 > + Chroma + MySQL + RabbitMQ + MinIO。AI 模块独立部署，与学成在线 Java 工程通过
 > **JWT（共享密钥 + 透传）/ RabbitMQ 消息 / HTTP 调用**交互，不侵入业务核心代码。
 
@@ -13,31 +13,35 @@
 ```
 xuecheng-plus-agent/
 ├── app/                        # Python 服务主代码
-│   ├── main.py                 # FastAPI 入口（静态页面 + API + 消费者线程 + 路由注册）
-│   ├── config.py               # 配置（.env）
-│   ├── auth.py                 # JWT 本地校验 + 用户画像解析（user_name=XcUserExt JSON）
-│   ├── llm.py                  # 百炼大模型/向量化封装（含无Key降级）
-│   ├── db.py                   # MySQL：chat_history / user_preferences（历史会话为聚合查询，无独立表）
-│   ├── memory.py               # 短期对话记忆 + 长期偏好 + SummarizationMiddleware
+│   ├── main.py                 # FastAPI 入口（静态页面 + API + 消费者线程 + 结构化日志）
+│   ├── config.py               # 配置（.env，pydantic-settings）
+│   ├── auth.py                 # JWT 本地校验 + 用户画像解析 + get_auth_context（单次解码）
+│   ├── llm.py                  # 百炼大模型/向量化封装（embedding 指数退避；含无Key降级）
+│   ├── db.py                   # MySQL：chat_history（含 courses 卡片列）/ user_preferences
+│   ├── memory.py               # 短期对话记忆 + 长期偏好 + 自动压缩 + 内存上限裁剪
 │   ├── rag.py                  # Chroma 向量库：入库 + 混合检索（向量+BM25+RRF）+ 阈值过滤
-│   ├── tools.py                # Agent 工具：讲义检索 / 课程推荐 / 我的课程 / 偏好管理
-│   ├── agent.py                # Agent 调度核心（流式 SSE + 请求级工具挂载 + 降级）
+│   ├── tools.py                # Agent 工具（@tool）：讲义检索 / 课程推荐 / 我的课程 / 偏好管理
+│   ├── agent.py                # Agent 调度核心（LangGraph create_agent + v3 事件流式 + 降级）
 │   ├── minio_client.py         # MinIO 下载/上传
-│   ├── rabbitmq.py             # 讲义消费（串行）+ 解析状态回调 Java
+│   ├── rabbitmq.py             # 讲义消费（串行 prefetch=1）+ 解析状态回调 Java
 │   ├── consumer.py             # 独立消费进程入口
 │   ├── schemas.py              # 接口数据模型
 │   ├── routers/
-│   │   ├── chat.py             # /api/chat（SSE 流式）、/api/sessions、会话消息
+│   │   ├── chat.py             # /api/chat（SSE 流式 + 心跳）、/api/sessions、会话消息
 │   │   ├── lecture.py          # /api/lecture/*（转发 media-api）
 │   │   └── preferences.py      # /api/preferences（偏好读写）
-│   └── static/                 # 聊天前端页面（HTML/CSS/JS，含历史会话侧栏）
+│   └── static/                 # 聊天前端页面（HTML/CSS/JS：Markdown 渲染 + 课程卡片 + 历史会话侧栏）
 ├── scripts/
 │   └── get_token.py            # 生成测试 JWT
 ├── docs/
 │   └── 对接文档.md             # Java 侧对接说明（JWT 约定 / 讲义链路 / 新接口）
-├── venv/                       # Python 虚拟环境
+├── venv/                       # Python 虚拟环境（3.13）
+├── data/chroma                 # 向量库持久化目录（自动生成）
+├── start.ps1 / 一键启动.bat    # 一键启动（自动检测端口/进程，打开页面）
+├── stop.ps1 / 停止服务.bat     # 停止服务
 ├── requirements.txt
-└── .env                        # 本机真实配置（不入库）
+├── .env                        # 本机真实配置（不入库，模板见 .env.example）
+└── README.md
 ```
 
 ## 二、快速启动
@@ -47,37 +51,47 @@ cd D:\ideafile\xuecheng-plus-project\xuecheng-plus-agent
 
 # 1) 虚拟环境（已创建；重装依赖用：venv\Scripts\python -m pip install -r requirements.txt）
 # 2) 配置 .env（DASHSCOPE_API_KEY 留空 = 降级模式，本地可跑通）
-# 3) 启动服务
+# 3) 启动服务（或直接双击 一键启动.bat）
 venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # 4) 打开页面 http://localhost:8000
 #    生成测试 token：venv\Scripts\python scripts\get_token.py <userId>
 ```
 
-启动后自动完成：MySQL 建表（xcplus_agent 库）→ Chroma 初始化 → Agent 构建 → 讲义消费线程启动。
+启动后自动完成：MySQL 建表（xcplus_agent 库）→ Chroma 初始化 → LangGraph Agent 构建 → 讲义消费线程启动。
 
-> 表结构权威定义见仓库根 `sql/` 目录（`sql/xuecheng-plus-agent.sql`：chat_history / user_preferences；`sql/xuecheng-plus-media.sql`：lecture_parse_status）。agent 启动自动建表（IF NOT EXISTS），SQL 文件供审阅 / 部署 / 迁移。
+> 表结构权威定义见仓库根 `sql/` 目录（`sql/xuecheng-plus-agent.sql`：chat_history / user_preferences；`sql/xuecheng-plus-media.sql`：lecture_parse_status）。agent 启动自动建表（IF NOT EXISTS + 幂等迁移），SQL 文件供审阅 / 部署 / 迁移。
 
 ## 三、接口一览
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |---|---|---|---|
-| POST | `/api/chat` | 问答（SSE 流式：thinking / answer / sources / courses / done 事件）`{message, session_id?}` | Bearer JWT |
+| POST | `/api/chat` | 问答（SSE 流式：thinking / answer / sources / courses / done 事件，15s 心跳）`{message, session_id?}` | Bearer JWT |
 | GET | `/api/sessions` | 用户最近会话列表（含首条消息摘要） | Bearer JWT |
-| GET | `/api/sessions/{id}/messages` | 某会话历史消息（历史会话 UI 用） | Bearer JWT |
+| GET | `/api/sessions/{id}/messages` | 某会话历史消息（含课程卡片，重开会话可重新渲染） | Bearer JWT |
 | GET | `/api/preferences` | 读取当前用户长期偏好 | Bearer JWT |
 | PUT | `/api/preferences` | 更新偏好（learning_stage/explanation_style/focus_directions/extra） | Bearer JWT |
 | POST | `/api/lecture/upload` | 转发 media-api：上传讲义触发解析 | Bearer JWT |
 | GET | `/api/lecture/parse-status/{file_id}` | 转发 media-api：单条解析状态 | Bearer JWT |
 | GET | `/api/lecture/parse-status/list` | 转发 media-api：按课程查解析状态列表 | Bearer JWT |
-| GET | `/api/health` | 服务与中间件健康状态 | 公开 |
+| GET | `/api/health` | 服务与中间件健康状态（mysql/rabbitmq/minio/rag） | 公开 |
 | GET | `/` | 聊天页面 | - |
+
+**SSE 事件协议**：
+
+| 事件 | data 载荷 | 说明 |
+|---|---|---|
+| `thinking` | `{text}` | 思考过程 / 工具调用提示（前端气泡式展示） |
+| `answer` | `{delta}` | 流式文本增量（逐字/逐块推送） |
+| `sources` | `[{course_id, course_name, source_file, page_num, text}]` | 讲义引用来源（RAG 命中时） |
+| `courses` | `[{id, name, cover, url, price}]` | 课程推荐卡片（找课命中时，与 done 一起推送） |
+| `done` | `{session_id, courses, sources, mode}` | 本轮结束（携带聚合后的卡片/来源） |
 
 ## 四、讲义入库链路（教学机构端上传 → 知识库）
 
 1. Java 侧（media-api）上传讲义 → 存入 MinIO（bucket `lecture`），讲义解析状态表新增记录（processing）
 2. Java 侧发 RabbitMQ 消息（topic 交换机 `xc.lecture`，路由键 `lecture.upload`，队列 `xc.lecture.parse`）
-3. AI 服务串行消费（prefetch=1）→ 下载 MinIO 文件 → 切分 → 百炼向量化 → 写入 Chroma（按 file_hash 去重）
+3. AI 服务串行消费（prefetch=1）→ 下载 MinIO 文件 → 提取文本（PDF/DOCX/TXT/MD）→ 递归切分 → 百炼向量化 → 写入 Chroma（按 file_hash 去重，重复上传覆盖旧切片）
 4. 处理完回调 Java 接口（`POST {JAVA_BASE_URL}/api/lecture/parse-status`）：`{"fileId":"xx","status":"success|failed","message":"..."}`，Java 侧写入状态表（xcplus_media.lecture_parse_status）
 5. 教学机构端轮询查询：media-api `GET /api/lecture/parse-status/list?courseId=`（agent 提供 `/api/lecture/*` 转发路由）
 
@@ -86,35 +100,45 @@ venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 配置 | 说明 |
 |---|---|
 | `DASHSCOPE_API_KEY` | 阿里百炼 Key；**留空 = 降级模式**（对话/检索/课程推荐本地可跑通） |
-| `LLM_MODEL` / `EMBEDDING_MODEL` | 默认 `qwen-plus` / `text-embedding-v3`，可改 |
+| `LLM_MODEL` / `EMBEDDING_MODEL` | 对话模型 / 向量模型；本项目使用 `qwen3.8-max` / `text-embedding-v3`（config 默认 qwen-plus 可改） |
 | `JWT_SECRET` / `JWT_ALGORITHM` | **必须与 Java 门户一致**（HS256），否则 401 |
 | `MYSQL_*` | agent 本地库 xcplus_agent（会话/偏好） |
 | `RABBITMQ_*` | 交换机 `xc.lecture`、路由键 `lecture.upload`、队列 `xc.lecture.parse` |
 | `MINIO_*` | MinIO 地址 / bucket `lecture` |
 | `JAVA_BASE_URL` | Java 后端地址（课程推荐 / 解析状态回调） |
 | `CHROMA_PATH` / `RAG_TOP_K` / `RAG_MAX_DISTANCE` | 向量库路径、召回数、相似度阈值过滤（默认 0.7） |
+| `MEMORY_MAX_MESSAGES` | 单会话内存缓冲消息数上限（默认 40，超出裁剪最旧；DB 全量保留） |
 
-## 六、Agent 工具
+## 六、Agent 工具（LangGraph 固定注册 + contextvar 注入）
 
-| 工具 | 说明 | 挂载方式 |
+| 工具 | 说明 | 请求级数据 |
 |---|---|---|
-| `course_lecture_search` | 讲义 RAG 检索（带来源课程/页码） | 全局 |
-| `course_info_query` | 公开课程推荐（走 Java 课程列表接口） | 全局 |
-| `my_courses_query` | "我的课程"（走网关 `/learning/mycoursetable`，**携带当前用户原始 JWT 透传**） | **请求级动态挂载**（token 为空不挂） |
-| `user_preference_read` / `user_preference_update` | 长期偏好读写 | 全局 |
+| `course_lecture_search` | 讲义 RAG 检索（带来源课程/页码） | — |
+| `course_info_query` | 公开课程推荐（走 Java 课程列表接口，httpx 连接池复用） | — |
+| `my_courses_query` | "我的课程"（走网关 `/learning/mycoursetable`，**透传当前用户原始 JWT**） | `set_my_courses_token(token)` 注入 |
+| `user_preference_read` / `user_preference_update` | 长期偏好读写 | `set_agent_user(user_id)` 注入 |
 
-## 七、核心设计点
+> 工具全部以 `@tool` 装饰器定义，请求级 user_id / JWT 通过 **contextvar** 注入——Agent 无需按请求重建，全局单例也不会串号；工具调用结果以 ToolMessage 回传，agent 按 `tool_call_id` 反查工具名聚合课程卡片/讲义来源。
 
-- **降级模式**：未配置百炼 Key 时，对话模型/向量化模型自动切换为本地实现，RAG 检索、课程推荐、记忆落库全链路可验证；填入 Key 重启即切回真实大模型（AgentExecutor）。
-- **SummarizationMiddleware**：对话上下文 token 超过阈值（默认 2000）自动调用大模型压缩，MySQL 保留原始全量对话用于审计。
-- **混合检索**：向量语义召回 + BM25 关键词召回 → RRF 融合去重 → TopN → 相似度阈值过滤（`rag_max_distance`）。
-- **串行消费**：RabbitMQ prefetch=1，逐份处理讲义，避免压垮模型接口。
-- **请求级工具挂载**："我的课程"工具按请求级 token 动态构造并挂载，避免全局单例串号；token 为空不挂载。
-- **JWT 透传**：agent 调用 Java 用户维接口时原样透传请求携带的 JWT，由网关负责身份解析。
-- **用户画像注入**：解析 JWT `user_name`（XcUserExt JSON）提取昵称/姓名/ID，注入系统提示，支持"我是谁"等个性化问答（兼容早期 sub/user_id/uid/userId 格式）。
-- **工具参数兼容**：百炼 DashScope 兼容层对单参数工具返回 `__arg1`，工具层用 `_first_str_arg` 通用键名兜底。
+## 七、Agent 调度核心（LangChain 1.x / LangGraph）
 
-## 八、与 Java 侧交互总览
+- **构建**：`langchain.agents.create_agent(model, tools)` → 编译为 LangGraph `CompiledStateGraph`，模型自主决策工具调用，支持多轮工具循环（recursion_limit=30）
+- **流式**：`astream_events(version="v3")` 事件协议（Pregel 实验特性）——文本增量在 `content-block-delta` 的 `delta.type=="text-delta"`；工具调用在 `content-block-finish`（结构化 args，无需键名兼容）；工具结果在 `tools` method 的 `tool-finished`
+- **上下文**：输入为 `{"messages": [...]}`（系统提示 + 会话历史 + 当前问题），历史由 SessionMemory 管理
+- **降级模式**：无 Key 时切规则引擎（闲聊直答 / 知识点走 RAG / 找课出课程卡片），全链路可本地验证
+
+## 八、核心设计点
+
+- **JWT 单次解码**：`get_auth_context` 一次解码同时产出 user_id / 原始 token / 用户画像，替代三次依赖重复解码；门户 JWT 用户身份在 `user_name`（XcUserExt JSON），兼容早期 `sub/user_id/uid/userId`，显示名优先级：昵称 > 姓名 > 用户名
+- **混合检索**：向量语义召回（相似度阈值过滤 `rag_max_distance=0.7`）+ BM25 关键词召回（轻量中文单字分词）→ RRF 融合去重（k=60）→ TopN
+- **记忆分层**：短期会话记忆（内存缓冲 + 自动压缩 SummarizationMiddleware，token 超阈值调大模型摘要）+ 长期偏好记忆（MySQL 持久化）+ 内存上限裁剪（`memory_max_messages`，DB 全量保留用于审计）
+- **SSE 心跳**：无事件超 15s 补发注释型 ping，防代理/网关掐断长连接
+- **串行消费**：RabbitMQ prefetch=1，逐份处理讲义，坏消息 ack 丢弃、临时错误 nack 重试一次，避免死循环刷屏
+- **embedding 指数退避**：百炼向量化对 429/5xx/网络错误自动重试（0.5s/1s，最多 3 次），RAG 入库/检索抗抖动
+- **结构化日志**：核心模块统一 `logging`（时间戳 + 级别 + 模块名），启动/消费/回调/鉴权均有可观测日志
+- **课程卡片持久化**：SSE `courses` 事件聚合去重后落库 `chat_history.courses` 列，重开历史会话前端自动重新渲染卡片
+
+## 九、与 Java 侧交互总览
 
 | 交互点 | 方向 | 说明 |
 |---|---|---|
@@ -127,3 +151,9 @@ venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 课程详情跳转 | 前端 → 门户 | 课程卡片链接 |
 
 > Java 侧详细对接见 [docs/对接文档.md](docs/对接文档.md)。
+
+## 十、聊天前端（app/static）
+
+- **Markdown 渲染**：内置轻量渲染器（表格/标题/列表/代码块/引用/加粗/行内代码/链接/分隔线），原文先转义再注入白名单标签防 XSS；流式半截表格、未闭合代码块容错渲染
+- **课程卡片**：封面 + 标题（无简介无箭头），排在气泡正下方，点击跳转门户课程详情页；模型正文禁止输出课程网址
+- **历史会话侧栏**：会话列表 + 消息记录，重开会话自动重渲课程卡片

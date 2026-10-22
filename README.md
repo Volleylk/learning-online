@@ -61,7 +61,7 @@ flowchart LR
 | 侧 | 技术 |
 | --- | --- |
 | Java 后端 | Spring Boot 2.3.7、Spring Cloud Gateway、Nacos、MyBatis-Plus、Lombok |
-| Python AI | FastAPI、LangChain、百炼 qwen（DashScope）、Chroma、pika（RabbitMQ）、MinIO（S3）、PyMySQL、PyJWT |
+| Python AI | FastAPI、LangChain 1.x（LangGraph create_agent + astream_events v3）、百炼 qwen（DashScope）、Chroma、pika（RabbitMQ）、MinIO（S3）、PyMySQL、PyJWT |
 | 前端 | Vue 2.6 + TypeScript + ElementUI（门户，独立仓库）；原生 HTML/JS（agent 页面） |
 | 中间件 | MySQL、Nacos、RabbitMQ、MinIO |
 
@@ -86,7 +86,7 @@ xuecheng-plus-project
 └── xuecheng-plus-agent          # AI 学习助手（Python FastAPI，独立 venv）
     ├── app/                     # 源码（auth / agent / rag / memory / tools / routers / static）
     ├── docs/                    # Agent 对接文档
-    ├── scripts/                 # 运维脚本
+    ├── scripts/                 # 运维脚本（一键启动/停止、测试 JWT 生成）
     └── venv/                    # Python 虚拟环境
 ```
 
@@ -201,7 +201,7 @@ sequenceDiagram
 - **MQ 发布确认（publisher confirm）**：Spring Boot 2.3.7 无 `setPublisherConfirmType` API，需重写 `RabbitTemplate` Bean；消息可靠性通过 confirm 回调 + 业务状态表兜底。
 - **JWT 兼容解析**：门户 JWT 用户身份在 `user_name`（XcUserExt JSON），兼容早期 `sub/user_id/uid/userId`；agent 侧统一解析并提取昵称/姓名注入系统提示，支持"我是谁"等个性化问答。
 - **RAG 检索质量控制**：向量召回加相似度阈值过滤（`rag_max_distance=0.7`），按 `file_hash` 去重，避免无效切片进入回答。
-- **百炼工具参数兼容**：DashScope 兼容层对单参数工具返回 `__arg1`，工具层做通用键名兜底（`_first_str_arg`）。
+- **v3 事件协议要点**：LangChain 1.x `astream_events(version="v3")` 中，文本增量在 `content-block-delta` 的 `delta.type=="text-delta"`（不是 `"text"`）；工具调用在 `content-block-finish`（结构化 args）；工具结果在 `tools` method 的 `tool-finished`（ToolMessage）——agent 按 `tool_call_id` 反查工具名聚合课程卡片/讲义来源。
 - **讲义状态持久化**：解析状态落 MySQL（`lecture_parse_status`），`update_time` 时区统一 Asia/Shanghai，前端可轮询展示"解析中 / 成功 / 失败"。
 
 ## 待办（规划中）
