@@ -110,7 +110,6 @@
         "</span>" +
         '<span class="info">' +
         '<span class="name">' + esc(c.name) + "</span>" +
-        '<span class="intro">' + esc(c.intro || "") + "</span>" +
         "</span>" +
         '<span class="go">→</span>';
       box.appendChild(a);
