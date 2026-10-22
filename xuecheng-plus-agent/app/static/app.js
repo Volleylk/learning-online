@@ -110,8 +110,7 @@
         "</span>" +
         '<span class="info">' +
         '<span class="name">' + esc(c.name) + "</span>" +
-        "</span>" +
-        '<span class="go">→</span>';
+        "</span>";
       box.appendChild(a);
     });
     container.appendChild(box);
