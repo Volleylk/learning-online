@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import time
 from typing import Any, List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -136,20 +137,33 @@ class DashScopeEmbeddings:
     def _post(self, texts: List[str]) -> List[List[float]]:
         import httpx
 
-        resp = httpx.post(
-            f"{self.base_url}/embeddings",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={"model": self.model, "input": texts},
-            timeout=60,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"百炼embedding调用失败 {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()["data"]
-        data.sort(key=lambda x: x.get("index", 0))  # 按请求顺序返回
-        return [item["embedding"] for item in data]
+        # 指数退避重试：5xx / 429（限流）/ 网络错误 最多重试 3 次
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                resp = httpx.post(
+                    f"{self.base_url}/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": self.model, "input": texts},
+                    timeout=60,
+                )
+                if resp.status_code != 200:
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                        raise RuntimeError(f"HTTP {resp.status_code}（可重试）")
+                    raise RuntimeError(
+                        f"百炼embedding调用失败 {resp.status_code}: {resp.text[:300]}"
+                    )
+                data = resp.json()["data"]
+                data.sort(key=lambda x: x.get("index", 0))  # 按请求顺序返回
+                return [item["embedding"] for item in data]
+            except Exception as e:  # 网络/超时/可重试状态码
+                last_err = e
+                if attempt < 2:
+                    time.sleep(0.5 * (2 ** attempt))  # 0.5s / 1s
+        raise RuntimeError(f"百炼embedding调用连续失败: {last_err}")
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         if not texts:

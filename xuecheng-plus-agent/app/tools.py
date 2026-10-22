@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
 import re
 from typing import Any, Dict, List
 
@@ -24,9 +25,14 @@ from langchain_core.tools import BaseTool, tool
 from app.config import settings
 from app.rag import RAGService
 
+log = logging.getLogger(__name__)
+
 # 请求级上下文（async 请求各自隔离，并发安全）
 _user_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_user_id", default="")
 _token_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_jwt", default="")
+
+# 共享 HTTP 客户端（连接池复用；httpx.Client 线程安全）
+_http = httpx.Client(timeout=8, follow_redirects=True)
 
 
 def set_agent_user(user_id: str) -> None:
@@ -74,7 +80,7 @@ def _query_java_courses(keyword: str) -> List[Dict[str, Any]]:
         return []
     url = f"{settings.java_base_url}{settings.course_list_path}"
     try:
-        resp = httpx.get(url, params={"keyword": keyword}, timeout=8)
+        resp = _http.get(url, params={"keyword": keyword})
         resp.raise_for_status()
         data = resp.json()
         items = data.get("data", data) if isinstance(data, dict) else data
@@ -82,7 +88,7 @@ def _query_java_courses(keyword: str) -> List[Dict[str, Any]]:
             return [_normalize_course(c) for c in items]
         return []
     except Exception as e:
-        print(f"[tools] Java课程接口调用失败: {e}")
+        log.warning("Java课程接口调用失败: %s", e)
         return []
 
 
@@ -119,7 +125,7 @@ def make_course_query_tool() -> BaseTool:
         """查询学成在线公开课程信息用于课程推荐。当用户想找课、要推荐课程、询问学什么/入门/进阶方向时调用。
 输入：课程关键词。输出：匹配的课程列表（含课程ID、名称、简介、封面、详情页URL）。"""
         courses = _query_java_courses(keyword)
-        print(f"[tools] course_info_query keyword={keyword!r} 命中={len(courses)} -> {[(c['id'], c['name']) for c in courses[:5]]}")
+        log.info("course_info_query keyword=%r 命中=%s -> %s", keyword, len(courses), [(c["id"], c["name"]) for c in courses[:5]])
         if not courses:
             return json.dumps({"found": False, "message": "未匹配到相关课程"}, ensure_ascii=False)
         return json.dumps({"found": True, "courses": courses}, ensure_ascii=False)
@@ -144,11 +150,10 @@ def make_my_courses_tool() -> BaseTool:
             return json.dumps({"found": False, "message": "登录态缺失，请重新登录门户"}, ensure_ascii=False)
         url = f"{settings.java_base_url}/learning/mycoursetable"
         try:
-            resp = httpx.get(
+            resp = _http.get(
                 url,
                 params={"page": 1, "size": 20},
                 headers={"Authorization": f"Bearer {token}"},
-                timeout=8,
             )
             if resp.status_code in (401, 403):
                 return json.dumps({"found": False, "message": "登录已过期，请重新登录门户"}, ensure_ascii=False)
@@ -175,7 +180,7 @@ def make_my_courses_tool() -> BaseTool:
                 return json.dumps({"found": False, "message": "当前还没有已选课程"}, ensure_ascii=False)
             return json.dumps({"found": True, "courses": courses}, ensure_ascii=False)
         except Exception as e:
-            print(f"[tools] 我的课程接口调用失败: {e}")
+            log.warning("我的课程接口调用失败: %s", e)
             return json.dumps({"found": False, "message": "查询我的课程失败"}, ensure_ascii=False)
 
     return my_courses_query

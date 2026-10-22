@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,12 @@ from app.routers import chat as chat_router
 from app.routers import lecture as lecture_router
 from app.routers import preferences as pref_router
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+log = logging.getLogger("xuecheng-agent")
+
 agent_core: AgentCore
 consumer: LectureConsumer | None = None
 
@@ -33,11 +40,14 @@ async def lifespan(app: FastAPI):
     init_db()
     # 2) RAG 向量库
     rag = init_rag(create_embeddings())
-    print(f"[startup] RAG向量库就绪，切片数={rag.count}")
+    log.info("RAG向量库就绪，切片数=%s", rag.count)
     # 3) Agent 调度核心
     llm = create_chat_model()
     agent_core = AgentCore(rag=rag, llm=llm)
-    print(f"[startup] Agent就绪，模式={'LangGraph(百炼qwen, astream_events v3)' if settings.llm_enabled else '无Key降级规则引擎'}")
+    log.info(
+        "Agent就绪，模式=%s",
+        "LangGraph(百炼qwen, astream_events v3)" if settings.llm_enabled else "无Key降级规则引擎",
+    )
     # 4) 讲义消费线程
     if settings.rabbit_consumer_enabled:
         consumer = LectureConsumer(rag)
@@ -45,7 +55,7 @@ async def lifespan(app: FastAPI):
     yield
     if consumer is not None:
         consumer.stop()
-    print("[shutdown] 服务已停止")
+    log.info("服务已停止")
 
 
 app = FastAPI(

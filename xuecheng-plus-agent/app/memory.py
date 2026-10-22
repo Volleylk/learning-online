@@ -124,7 +124,11 @@ class SessionMemory:
         # 2) 更新内存缓冲
         self.messages.append(HumanMessage(content=user_msg))
         self.messages.append(AIMessage(content=assistant_msg))
-        # 3) 触发上下文压缩
+        # 3) 内存上限裁剪：超出丢弃最旧消息（DB 全量落盘不受影响）
+        max_msgs = settings.memory_max_messages
+        if max_msgs > 0 and len(self.messages) > max_msgs:
+            self.messages = self.messages[-max_msgs:]
+        # 4) 触发上下文压缩
         self.middleware.check_and_compress(self.messages)
 
 

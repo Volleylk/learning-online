@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator, List, Optional
@@ -23,6 +24,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -127,7 +130,7 @@ def _migrate_chat_history_courses() -> None:
         ).scalar()
         if not exists:
             session.execute(sa_text("ALTER TABLE chat_history ADD COLUMN courses TEXT NULL"))
-            print("[db] chat_history.courses 列已添加（迁移）")
+            log.info("chat_history.courses 列已添加（迁移）")
 
 
 # ---------------------------------------------------------------------------

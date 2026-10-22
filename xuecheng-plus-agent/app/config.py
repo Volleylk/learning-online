@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     # 记忆
     memory_token_threshold: int = 2000
     history_max_turns: int = 20
+    # 单会话内存缓冲消息数上限（超出裁剪最旧，防止长会话内存无限增长；DB 全量保留）
+    memory_max_messages: int = 40
 
     # RAG
     chroma_path: str = "data/chroma"

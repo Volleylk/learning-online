@@ -12,6 +12,7 @@ AI 服务与 Java 门户共享同一套 JWT 密钥，本地解析 token 获取 u
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 
 import jwt
@@ -20,6 +21,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.warnings import InsecureKeyLengthWarning
 
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 # 门户密钥 mq123 由 xuecheng-plus-auth TokenConfig.SIGNING_KEY 硬编码（5字节），
 # 低于 PyJWT 推荐的 32 字节；该密钥由 Java 端决定，无法单方面改长，
@@ -45,7 +48,7 @@ def decode_token(token: str) -> str:
             options={"verify_aud": False},  # 门户JWT带aud=xuecheng-plus，忽略以兼容
         )
     except jwt.PyJWTError as e:  # 过期/签名错误/格式错误 → 拒绝
-        print(f"[auth] JWT校验失败: {e}")
+        log.warning("JWT校验失败: %s", e)
         raise ValueError(f"无效的JWT: {e}") from e
 
     # 兼容早期自定义 JWT：sub/user_id/uid/userId 直接携带用户ID
@@ -64,7 +67,7 @@ def decode_token(token: str) -> str:
                 return str(uid)
         except Exception:
             pass  # JSON 解析失败，落到下方统一拒绝
-    print("[auth] JWT中未找到用户ID(user_name/sub)")
+    log.warning("JWT中未找到用户ID(user_name/sub)")
     raise ValueError("JWT中未找到用户ID")
 
 
@@ -150,3 +153,36 @@ def get_current_user_profile(
             detail=str(e),
         ) from e
     return parse_user_profile(cred.credentials)
+
+
+class AuthContext:
+    """一次 JWT 解码的完整请求上下文（user_id / 原始token / 用户画像）。"""
+
+    def __init__(self, user_id: str, token: str, profile: dict):
+        self.user_id = user_id
+        self.token = token
+        self.profile = profile
+
+
+def get_auth_context(
+    cred: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> AuthContext:
+    """FastAPI 依赖：单次解码 JWT，同时产出 user_id / 原始token / 画像。
+
+    /api/chat 热点接口使用，替代分别注入 get_current_user + get_current_credentials
+    + get_current_user_profile（原先每请求解码 2~3 次 JWT）。
+    """
+    if cred is None or not cred.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少登录凭证，请携带JWT token访问",
+        )
+    token = cred.credentials
+    try:
+        user_id = decode_token(token)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+        ) from e
+    return AuthContext(user_id=user_id, token=token, profile=parse_user_profile(token))
