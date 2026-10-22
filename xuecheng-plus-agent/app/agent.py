@@ -256,7 +256,7 @@ class AgentCore:
         set_agent_user(user_id)
         set_my_courses_token(token)
         if settings.llm_enabled:
-            async for ev in self._stream_agent(query, session_memory, user_id, token, profile):
+            async for ev in self._stream_agent(query, user_id, session_memory, token, profile):
                 yield ev
         else:
             for ev in self._stream_fallback(query, session_memory, user_id, profile):
@@ -296,9 +296,10 @@ class AgentCore:
                     evt = data[0]
                     e = evt.get("event")
                     if e == "content-block-delta":
-                        fields = (evt.get("delta") or {}).get("fields") or {}
-                        if fields.get("type") == "text":
-                            text = fields.get("text", "")
+                        delta = evt.get("delta") or {}
+                        # 文本增量：delta.type == "text-delta"（工具轮是 block-delta，忽略）
+                        if delta.get("type") == "text-delta":
+                            text = delta.get("text", "")
                             if text:
                                 yield {"type": "answer", "delta": text}
                     elif e == "content-block-finish":

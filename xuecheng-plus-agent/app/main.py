@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     # 3) Agent 调度核心
     llm = create_chat_model()
     agent_core = AgentCore(rag=rag, llm=llm)
-    print(f"[startup] Agent就绪，模式={'AgentExecutor(百炼qwen)' if settings.llm_enabled else '无Key降级规则引擎'}")
+    print(f"[startup] Agent就绪，模式={'LangGraph(百炼qwen, astream_events v3)' if settings.llm_enabled else '无Key降级规则引擎'}")
     # 4) 讲义消费线程
     if settings.rabbit_consumer_enabled:
         consumer = LectureConsumer(rag)
