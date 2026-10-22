@@ -132,10 +132,14 @@ class SessionMemory:
         self.middleware.check_and_compress(self.messages)
 
 
+def get_preferences_text(user_id: str) -> str:
+    """取用户长期学习偏好的纯文本（供提示词拼接 / 降级回复直接引用）。"""
+    return db.preferences_to_prompt(db.get_preferences(user_id))
+
+
 def build_system_prompt(user_id: str, display_name: str = "", extra_rules: str = "") -> str:
     """构建 Agent 系统提示词：注入用户身份/长期偏好 + 模块行为规则。"""
-    prefs = db.get_preferences(user_id)
-    pref_text = db.preferences_to_prompt(prefs)
+    pref_text = get_preferences_text(user_id)
     identity = f"用户ID：{user_id}"
     if display_name:
         identity += f"，用户昵称/姓名：{display_name}"

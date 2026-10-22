@@ -20,7 +20,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.config import settings
-from app.memory import SessionMemory, build_system_prompt
+from app.memory import SessionMemory, build_system_prompt, get_preferences_text
 from app.rag import RAGService
 from app.tools import (
     make_course_query_tool,
@@ -210,7 +210,7 @@ class AgentCore:
                         courses = parsed["courses"]
                 except Exception:
                     pass
-            prefs = build_system_prompt(user_id, _display_name(profile)).split("该用户的长期学习偏好：")[-1].split("\n")[0]
+            prefs = get_preferences_text(user_id)
             if courses:
                 names = "、".join(c["name"] for c in courses[:3])
                 answer = (
