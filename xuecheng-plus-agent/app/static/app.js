@@ -374,9 +374,11 @@
       sessionId = sid;
       localStorage.setItem("xc_session_id", sid);
       chat.innerHTML = "";
-      msgs.forEach((m) =>
-        addMessage(m.role === "user" ? "user" : "assistant", m.content)
-      );
+      msgs.forEach((m) => {
+        const wrap = addMessage(m.role === "user" ? "user" : "assistant", m.content);
+        // 历史消息若带课程卡片数据，重新渲染（与流式一致）
+        if (m.courses && m.courses.length) renderCourses(wrap, m.courses);
+      });
       if (!msgs.length) renderWelcome();
       scrollBottom();
       refreshActive();

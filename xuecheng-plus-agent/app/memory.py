@@ -106,10 +106,21 @@ class SessionMemory:
         msgs = self.middleware.to_context(self.messages)
         return {"chat_history": msgs}
 
-    def save_turn(self, user_msg: str, assistant_msg: str) -> None:
-        # 1) 全量落盘 MySQL（审计用）
+    def save_turn(
+        self,
+        user_msg: str,
+        assistant_msg: str,
+        assistant_courses: Optional[list] = None,
+    ) -> None:
+        # 1) 全量落盘 MySQL（审计用；assistant 消息携带课程卡片 JSON）
         db.save_chat_turn(self.user_id, self.session_id, "user", user_msg)
-        db.save_chat_turn(self.user_id, self.session_id, "assistant", assistant_msg)
+        db.save_chat_turn(
+            self.user_id,
+            self.session_id,
+            "assistant",
+            assistant_msg,
+            assistant_courses,
+        )
         # 2) 更新内存缓冲
         self.messages.append(HumanMessage(content=user_msg))
         self.messages.append(AIMessage(content=assistant_msg))

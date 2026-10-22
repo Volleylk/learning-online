@@ -33,15 +33,26 @@ async def _event_stream(
 ):
     """把 AgentCore.stream_run（LangGraph v3 异步流式）的事件序列组装成 SSE 文本，结束后落库。"""
     answer_parts: List[str] = []
+    courses_acc: List[dict] = []
+
+    def _merge_courses(items: list | None) -> None:
+        for c in items or []:
+            if not any(x.get("id") == c.get("id") for x in courses_acc):
+                courses_acc.append(c)
+
     try:
         async for ev in core.stream_run(message, user_id, memory, token, profile):
             if ev.get("type") == "answer":
                 answer_parts.append(ev.get("delta", ""))
+            elif ev.get("type") == "courses":
+                _merge_courses(ev.get("courses"))
+            elif ev.get("type") == "done":
+                _merge_courses(ev.get("courses"))
             yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
     finally:
         # 客户端断开也尽量落库（审计）；answer 可能不完整
         try:
-            memory.save_turn(message, "".join(answer_parts))
+            memory.save_turn(message, "".join(answer_parts), courses_acc or None)
         except Exception as e:
             print(f"[chat] 对话落库失败: {e}")
 
