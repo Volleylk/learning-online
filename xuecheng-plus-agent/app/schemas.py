@@ -33,7 +33,7 @@ class ChatResponse(BaseModel):
     session_id: str
     courses: List[CourseCard] = []
     sources: List[SourceItem] = []
-    mode: str = "agent"   # agent=真实AgentExecutor / fallback=无Key降级
+    mode: str = "agent"   # agent=真实LangGraph / fallback=无Key降级
 
 
 class PreferenceUpdate(BaseModel):
