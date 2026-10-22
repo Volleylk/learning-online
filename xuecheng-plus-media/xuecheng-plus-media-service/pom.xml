@@ -22,6 +22,14 @@
             <version>8.4.3</version>
         </dependency>
 
+        <!-- AWS S3 SDK：MinIO 兼容 S3 API，用标准 Multipart Upload 实现断点续传
+             （版本 1.11.792：与其内部 aws-java-sdk-core/kms 传递版本一致，避免版本漂移） -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-s3</artifactId>
+            <version>1.11.792</version>
+        </dependency>
+
         <!-- RabbitMQ：讲义上传后发消息给 AI 服务异步解析 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

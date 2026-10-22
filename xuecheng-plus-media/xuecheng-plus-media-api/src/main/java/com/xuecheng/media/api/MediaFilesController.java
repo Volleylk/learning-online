@@ -17,9 +17,6 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
-import java.io.IOException;
-
 /**
  * @author Mr.M
  * @version 1.0
@@ -44,7 +41,7 @@ public class MediaFilesController {
     @ApiOperation("上传文件")
     @RequestMapping(value = "/upload/coursefile", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseBody
-    public UploadFileResultDto upload(@RequestPart("filedata") MultipartFile filedata, @RequestParam(value = "folder", required = false) String folder, @RequestParam(value = "objectName", required = false) String objectName) throws IOException {
+    public UploadFileResultDto upload(@RequestPart("filedata") MultipartFile filedata, @RequestParam(value = "folder", required = false) String folder, @RequestParam(value = "objectName", required = false) String objectName) {
 
         Long companyId = 1232141425L;
         UploadFileParamsDto uploadFileParamsDto = new UploadFileParamsDto();
@@ -54,22 +51,8 @@ public class MediaFilesController {
         uploadFileParamsDto.setFileType("001001");
         //文件名称
         uploadFileParamsDto.setFilename(filedata.getOriginalFilename());
-        //创建临时文件
-        File tempFile = null;
-        try {
-            tempFile = File.createTempFile("minio", "temp");
-            //上传的文件拷贝到临时文件
-            filedata.transferTo(tempFile);
-            //文件路径
-            String absolutePath = tempFile.getAbsolutePath();
-            //上传文件
-            UploadFileResultDto uploadFileResultDto = mediaFileService.uploadFile(companyId, uploadFileParamsDto, absolutePath, objectName);
-            return uploadFileResultDto;
-        } finally {
-            if (tempFile != null) {
-                tempFile.delete();
-            }
-        }
+        //流式直传：传 MultipartFile（service 内两次 getInputStream() 分别用于 MD5 与 putObject）
+        return mediaFileService.uploadFile(companyId, uploadFileParamsDto, filedata, filedata.getSize(), objectName);
     }
 
 }

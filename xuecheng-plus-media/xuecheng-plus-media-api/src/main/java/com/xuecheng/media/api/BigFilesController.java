@@ -1,15 +1,17 @@
 package com.xuecheng.media.api;
 
 import com.xuecheng.base.model.RestResponse;
-import com.xuecheng.media.model.dto.UploadFileParamsDto;
-import com.xuecheng.media.service.MediaFileService;
+import com.xuecheng.media.model.dto.InitMultipartResultDto;
+import com.xuecheng.media.model.dto.UploadedPartDto;
+import com.xuecheng.media.service.MultipartUploadService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
+import java.io.IOException;
+import java.util.List;
 
 /**
  * @author Mr.M
@@ -22,60 +24,46 @@ import java.io.File;
 @RequestMapping("/upload")
 public class BigFilesController {
 
-    private final MediaFileService mediaFileService;
+    private final MultipartUploadService multipartUploadService;
 
-    @ApiOperation(value = "文件上传前检查文件")
-    @PostMapping("/checkfile")
-    public RestResponse<Boolean> checkfile(
-            @RequestParam("fileMd5") String fileMd5
-    ) throws Exception {
-        return mediaFileService.checkFile(fileMd5);
-    }
+    /* =============== S3 Multipart 标准实现 =============== */
 
-    @ApiOperation(value = "分块文件上传前的检测")
-    @PostMapping("/checkchunk")
-    public RestResponse<Boolean> checkchunk(@RequestParam("fileMd5") String fileMd5,
-                                            @RequestParam("chunk") int chunk) throws Exception {
-        return mediaFileService.checkChunk(fileMd5, chunk);
-    }
-
-    @ApiOperation(value = "上传分块文件")
-    @PostMapping("/uploadchunk")
-    public RestResponse uploadchunk(@RequestParam("file") MultipartFile file,
-                                    @RequestParam("fileMd5") String fileMd5,
-                                    @RequestParam("chunk") int chunk) throws Exception {
-
-        File tempFile = null;
-        try {
-            tempFile = File.createTempFile("minio", "temp");
-            //上传的文件拷贝到临时文件
-            file.transferTo(tempFile);
-            //文件路径
-            String absolutePath = tempFile.getAbsolutePath();
-            //上传文件
-            return mediaFileService.uploadChunk(fileMd5, chunk, absolutePath);
-        } finally {
-            if (tempFile != null) {
-                tempFile.delete();
-            }
-        }
-    }
-
-    @ApiOperation(value = "合并文件")
-    @PostMapping("/mergechunks")
-    public RestResponse mergechunks(@RequestParam("fileMd5") String fileMd5,
-                                    @RequestParam("fileName") String fileName,
-                                    @RequestParam("chunkTotal") int chunkTotal) throws Exception {
+    @ApiOperation(value = "发起分片上传（秒传检查+建会话）")
+    @PostMapping("/multipart/init")
+    public RestResponse<InitMultipartResultDto> initMultipart(@RequestParam("fileMd5") String fileMd5,
+                                                              @RequestParam("fileName") String fileName,
+                                                              @RequestParam("chunkTotal") int chunkTotal,
+                                                              @RequestParam("totalSize") long totalSize) {
         Long companyId = 1232141425L;
+        return multipartUploadService.initMultipart(companyId, fileMd5, fileName, chunkTotal, totalSize);
+    }
 
-        UploadFileParamsDto uploadFileParamsDto = new UploadFileParamsDto();
-        uploadFileParamsDto.setFileType("001002");
-        uploadFileParamsDto.setTags("课程视频");
-        uploadFileParamsDto.setRemark("");
-        uploadFileParamsDto.setFilename(fileName);
+    @ApiOperation(value = "上传分片（流式直传，返回ETag）")
+    @PostMapping("/multipart/part")
+    public RestResponse<UploadedPartDto> uploadPart(@RequestParam("file") MultipartFile file,
+                                                    @RequestParam("uploadId") String uploadId,
+                                                    @RequestParam("partNumber") int partNumber) throws IOException {
+        return multipartUploadService.uploadPart(uploadId, partNumber, file.getInputStream(), file.getSize());
+    }
 
-        return mediaFileService.mergechunks(companyId,fileMd5,chunkTotal,uploadFileParamsDto);
+    @ApiOperation(value = "查询已传分片列表（断点续传判定）")
+    @PostMapping("/multipart/parts")
+    public RestResponse<List<UploadedPartDto>> listParts(@RequestParam("uploadId") String uploadId) {
+        return multipartUploadService.listParts(uploadId);
+    }
 
+    @ApiOperation(value = "合并分片（服务端收齐+校验+原子合并+入库）")
+    @PostMapping("/multipart/complete")
+    public RestResponse<Boolean> completeMultipart(@RequestParam("uploadId") String uploadId,
+                                                   @RequestParam("fileMd5") String fileMd5) {
+        Long companyId = 1232141425L;
+        return multipartUploadService.completeMultipart(uploadId, fileMd5, companyId);
+    }
+
+    @ApiOperation(value = "放弃上传（清理会话）")
+    @PostMapping("/multipart/abort")
+    public RestResponse<Boolean> abortMultipart(@RequestParam("uploadId") String uploadId) {
+        return multipartUploadService.abortMultipart(uploadId);
     }
 
 }
