@@ -4,16 +4,18 @@
 1. 短期对话记忆：按 user_id + session_id 关联存储，会话内自动注入上下文
 2. 长期偏好记忆：按 user_id 唯一存储，每次对话自动加载注入提示词
 
+LangChain 1.x 已移除 ConversationBufferMemory，这里改为自管理消息列表
+（内存缓冲 + 压缩），MySQL 仍保留全量对话用于审计。
+
 上下文压缩由 SummarizationMiddleware 完成：对话上下文 token 数超过阈值时，
-调用大模型对历史做摘要并替换运行时上下文（MySQL 中仍留存原始全量对话用于审计）。
+调用大模型对历史做摘要并替换运行时上下文。
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain.memory import ConversationBufferMemory
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 import app.db as db
 from app.config import settings
@@ -40,9 +42,8 @@ class SummarizationMiddleware:
         self.threshold_tokens = threshold_tokens
         self.summary: str = ""
 
-    def check_and_compress(self, memory: ConversationBufferMemory) -> None:
-        """在 save_context 之后调用：超阈值则压缩。"""
-        messages = memory.chat_memory.messages
+    def check_and_compress(self, messages: List[BaseMessage]) -> None:
+        """在写入新对话之后调用：超阈值则压缩。"""
         raw = "\n".join(
             f"{m.type}: {m.content if isinstance(m.content, str) else str(m.content)}"
             for m in messages
@@ -64,16 +65,16 @@ class SummarizationMiddleware:
             except Exception as e:  # 摘要失败不阻断对话
                 self.summary = raw[-800:]
 
-        # 压缩运行时上下文：清空缓冲，由 load_memory_variables 注入摘要
-        memory.chat_memory.clear()
+        # 压缩运行时上下文：清空缓冲，由 to_context 注入摘要
+        messages.clear()
 
-    def to_context(self, memory: ConversationBufferMemory) -> List[BaseMessage]:
+    def to_context(self, messages: List[BaseMessage]) -> List[BaseMessage]:
         """把（摘要 + 剩余未压缩消息）组装为注入上下文的消息列表。"""
-        messages: List[BaseMessage] = []
+        context: List[BaseMessage] = []
         if self.summary:
-            messages.append(SystemMessage(content=f"之前的对话摘要：{self.summary}"))
-        messages.extend(memory.chat_memory.messages)
-        return messages
+            context.append(SystemMessage(content=f"之前的对话摘要：{self.summary}"))
+        context.extend(messages)
+        return context
 
 
 class SessionMemory:
@@ -92,22 +93,17 @@ class SessionMemory:
         self.middleware = SummarizationMiddleware(
             llm, threshold_tokens=settings.memory_token_threshold
         )
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            output_key="output",
-        )
+        self.messages: List[BaseMessage] = []
         # 预置最近历史（来自 MySQL），保证多轮连贯
         for turn in history_turns or []:
-            self.memory.chat_memory.add_message(
-                HumanMessage(content=turn["content"])
-                if turn["role"] == "user"
-                else SystemMessage(content=turn["content"])
-            )
+            if turn["role"] == "user":
+                self.messages.append(HumanMessage(content=turn["content"]))
+            else:
+                self.messages.append(AIMessage(content=turn["content"]))
 
     def load_variables(self) -> Dict[str, Any]:
         """返回注入给 Agent 的上下文变量。"""
-        msgs = self.middleware.to_context(self.memory)
+        msgs = self.middleware.to_context(self.messages)
         return {"chat_history": msgs}
 
     def save_turn(self, user_msg: str, assistant_msg: str) -> None:
@@ -115,9 +111,10 @@ class SessionMemory:
         db.save_chat_turn(self.user_id, self.session_id, "user", user_msg)
         db.save_chat_turn(self.user_id, self.session_id, "assistant", assistant_msg)
         # 2) 更新内存缓冲
-        self.memory.save_context({"input": user_msg}, {"output": assistant_msg})
+        self.messages.append(HumanMessage(content=user_msg))
+        self.messages.append(AIMessage(content=assistant_msg))
         # 3) 触发上下文压缩
-        self.middleware.check_and_compress(self.memory)
+        self.middleware.check_and_compress(self.messages)
 
 
 def build_system_prompt(user_id: str, display_name: str = "", extra_rules: str = "") -> str:

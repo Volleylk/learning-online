@@ -1,7 +1,7 @@
 """大模型接入模块。
 
 统一封装阿里百炼平台（OpenAI 兼容模式）：
-- 对话模型：千问系列（qwen-plus），供 Agent 调度、上下文总结使用
+- 对话模型：千问系列（qwen3.8-max），供 Agent 调度、上下文总结使用
 - 向量化模型：百炼 text-embedding 系列，供 RAG 入库与检索使用
 
 未配置 DASHSCOPE_API_KEY 时进入降级模式：
@@ -18,7 +18,7 @@ from typing import Any, List, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 
 from app.config import settings
 
@@ -67,12 +67,10 @@ class FallbackChatModel(BaseChatModel):
 def create_chat_model() -> BaseChatModel:
     """按配置创建对话模型：有 Key 用千问，无 Key 用降级模型。
 
-    model_kwargs.extra_body 透传百炼专属参数（OpenAI 兼容接口的非标准字段，
-    必须走 extra_body 通道，否则 openai SDK 会当作未知关键字报错）：
-    - result_format="message"：传 tools 时必须的返回格式
-    - incremental_output=true：开启流式增量输出，流式工具调用才生效
-    这两个参数是"流式 + 工具调用"组合场景的必填项，缺了 LangChain 流式
-    解析不到 tool_calls（实测）。对非流式调用无副作用。
+    LangChain 1.x 说明：qwen3.8-max 在百炼 OpenAI 兼容端点上实测无需
+    result_format=message / incremental_output（0.3 时代为流式工具调用
+    必需的 extra_body 透传），1.x 新版结构化流式协议直接产出 tool_call
+    增量，故这里使用干净配置；若日后换用旧模型可显式传 extra_body 参数。
     """
     if settings.llm_enabled:
         return ChatOpenAI(
@@ -82,12 +80,6 @@ def create_chat_model() -> BaseChatModel:
             temperature=settings.llm_temperature,
             timeout=60,
             max_retries=2,
-            model_kwargs={
-                "extra_body": {
-                    "result_format": "message",
-                    "incremental_output": True,
-                }
-            },
         )
     return FallbackChatModel()
 

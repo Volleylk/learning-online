@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Iterator, List
+from typing import List
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -22,7 +22,7 @@ def _agent_core() -> AgentCore:
     return agent_core
 
 
-def _event_stream(
+async def _event_stream(
     core: AgentCore,
     message: str,
     user_id: str,
@@ -30,11 +30,11 @@ def _event_stream(
     session_id: str,
     token: str = "",
     profile: dict | None = None,
-) -> Iterator[str]:
-    """把 AgentCore.stream_run 的事件序列组装成 SSE 文本，结束后落库。"""
+):
+    """把 AgentCore.stream_run（LangGraph v3 异步流式）的事件序列组装成 SSE 文本，结束后落库。"""
     answer_parts: List[str] = []
     try:
-        for ev in core.stream_run(message, user_id, memory, token, profile):
+        async for ev in core.stream_run(message, user_id, memory, token, profile):
             if ev.get("type") == "answer":
                 answer_parts.append(ev.get("delta", ""))
             yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
