@@ -1,8 +1,9 @@
-"""Agent 调度核心模块。
+"""Agent 调度核心模块（LangChain 1.x + LangGraph）。
 
-- 有 Key：基于 LangChain AgentExecutor + create_tool_calling_agent 构建决策中枢，
-  自行判断是否调用讲义检索 / 课程查询 / 偏好管理工具，直到生成最终回答；
-  挂载 SummarizationMiddleware 自动压缩历史上下文。
+- 有 Key：基于 langchain.agents.create_agent（LangGraph CompiledStateGraph）
+  构建决策中枢，自行判断是否调用讲义检索 / 课程查询 / 偏好管理工具，
+  直到生成最终回答；挂载 SummarizationMiddleware 自动压缩历史上下文。
+  流式走 astream_events(version="v3") 事件协议（Pregel 实验特性，1.3.0+）。
 - 无 Key（降级模式）：规则引擎决策工具调用，本地可完整跑通
   "闲聊直答 / 知识点走RAG / 找课出课程卡片" 三条链路。
 
@@ -12,15 +13,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.config import settings
-from app.memory import SessionMemory, build_system_prompt
+from app.memory import SessionMemory, build_system_prompt, get_preferences_text
 from app.rag import RAGService
 from app.tools import (
     make_course_query_tool,
@@ -28,12 +28,17 @@ from app.tools import (
     make_my_courses_tool,
     make_preference_tools,
     pref_handler,
+    set_agent_user,
+    set_my_courses_token,
 )
 
 # 找课意图关键词（降级模式判断用）
 FIND_COURSE_RE = re.compile(r"(推荐|找课|选课|学什么|入门|进阶|课程|有哪些|适合.*学|报.*班)")
 # 知识点/讲义意图关键词
 KNOWLEDGE_RE = re.compile(r"(讲义|知识点|概念|是什么|怎么理解|解释|原理|区别|为什么|怎么做|步骤)")
+
+# LangGraph 递归深度上限（约对应 0.3 时代 max_iterations=6 的循环轮数）
+RECURSION_LIMIT = 30
 
 
 def _display_name(profile: dict | None) -> str:
@@ -48,61 +53,47 @@ def _display_name(profile: dict | None) -> str:
     ).strip()
 
 
-def _first_str_arg(args: Dict[str, Any]) -> str:
-    """从工具参数 dict 中提取第一个有意义的字符串值。
-
-    百炼 DashScope 兼容层对单参数工具返回的参数名是 __arg1（非 OpenAI
-    标准的关键字名），因此不能只按 query/keyword 取，需兼容常见命名并
-    兜底取任意第一个非空字符串。
-    """
-    if not isinstance(args, dict):
-        return ""
-    for key in ("query", "keyword", "__arg1", "input", "text", "search"):
-        v = args.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    for v in args.values():
-        if isinstance(v, str) and v.strip():
-            return v.strip()
+def _tool_name_for_call_id(messages: List[BaseMessage], tool_call_id: str) -> str:
+    """在消息序列中按 tool_call_id 反查工具名。"""
+    for m in messages:
+        if getattr(m, "type", None) == "ai":
+            for tc in getattr(m, "tool_calls", None) or []:
+                if tc.get("id") == tool_call_id:
+                    return tc.get("name", "")
     return ""
 
 
-def _parse_tool_args(raw: str) -> Dict[str, Any]:
-    """容错解析百炼增量流式下的工具参数。
-
-    百炼 incremental_output 的 tool_call_chunks.args 存在两种异常形态：
-    1) 每次 chunk 携带全量 JSON（非增量片段），直接拼接导致 json.loads 失败；
-    2) args 是字符串化的 JSON（内嵌转义引号）。
-    这里逐级尝试：直接解析 → 取最后一个完整 JSON 对象 → 正则提取 keyword/query。
-    """
-    if not raw:
-        return {}
-    raw = raw.strip()
-    # 1) 直接 JSON
+def _aggregate_tool_output(name: str, out_text: str, courses: List[Dict], sources: List[Dict]) -> str:
+    """解析工具返回 JSON，聚合课程卡片 / 讲义来源；返回给前端的 thinking 文案。"""
+    if not isinstance(out_text, str):
+        return ""
     try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            return obj
-        if isinstance(obj, str):
-            obj2 = json.loads(obj)
-            if isinstance(obj2, dict):
-                return obj2
+        parsed = json.loads(out_text)
     except Exception:
-        pass
-    # 2) 重复全量拼接时取最后一个 JSON 对象（如 {"keyword":"A"}{"keyword":"AB"}）
-    try:
-        idx = raw.rfind("{")
-        obj = json.loads(raw[idx:])
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        pass
-    # 3) 正则兜底
-    for key in ("keyword", "query"):
-        m = re.search(r'"%s"\s*:\s*"([^"]*)"' % key, raw)
-        if m:
-            return {key: m.group(1)}
-    return {}
+        return ""
+    if not isinstance(parsed, dict) or not parsed.get("found"):
+        return ""
+    if name == "course_info_query" and isinstance(parsed.get("courses"), list):
+        for c in parsed["courses"]:
+            if not any(existing.get("id") == c.get("id") for existing in courses):
+                courses.append(c)
+        return f"找到 {len(courses)} 门相关课程…"
+    if name == "course_lecture_search" and isinstance(parsed.get("items"), list):
+        items = parsed["items"]
+        sources[:] = [
+            {
+                "course_id": it.get("course_id"),
+                "course_name": it.get("course_name"),
+                "source_file": it.get("source_file"),
+                "page_num": it.get("page", it.get("page_num")),
+                "text": it.get("text", ""),
+            }
+            for it in items
+        ]
+        return f"检索到 {len(sources)} 条讲义片段…"
+    if name in ("user_preference_update", "user_preference_read"):
+        return "正在读取/更新你的学习偏好…"
+    return ""
 
 
 class AgentCore:
@@ -116,89 +107,70 @@ class AgentCore:
         self.llm = llm
         self._course_tool = make_course_query_tool()
         self._lecture_tool = make_lecture_search_tool(rag)
-        self._pref_tools = preference_tools or make_preference_tools(
-            lambda u, a: pref_handler(u, a, "")
-        )
-        self._executor: Optional[AgentExecutor] = None
+        self._pref_tools = preference_tools or make_preference_tools()
+        self._agent = None
         if settings.llm_enabled:
-            self._build_executor()
+            self._build_agent()
 
     # ------------------------------------------------------------------
-    # 有 Key 路径：AgentExecutor
+    # 有 Key 路径：LangGraph（create_agent，LangChain 1.x 新入口）
     # ------------------------------------------------------------------
-    def _build_executor(self) -> None:
-        tools = [self._lecture_tool, self._course_tool] + self._pref_tools
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", "{system_prompt}"),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ]
-        )
-        agent = create_tool_calling_agent(self.llm, tools, prompt)
-        self._executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            max_iterations=6,
-            handle_parsing_errors=True,
-            verbose=False,
-            return_intermediate_steps=True,
-        )
+    def _build_agent(self):
+        """构建 LangGraph agent（tools 固定注册；动态内容经输入消息注入）。
 
-    def _run_agent_executor(
+        - 系统提示不绑定在构建期：每请求动态系统提示作为输入消息首条 SystemMessage。
+        - "我的课程" / 偏好工具通过 contextvar 读取请求级 user_id / JWT，
+          无需每次请求重建 agent。
+        """
+        tools = [
+            self._lecture_tool,
+            self._course_tool,
+            make_my_courses_tool(),
+            *self._pref_tools,
+        ]
+        self._agent = create_agent(model=self.llm, tools=tools)
+
+    def _input_messages(
+        self, query: str, session_memory: SessionMemory, user_id: str, profile: dict | None
+    ) -> List[BaseMessage]:
+        system_prompt = build_system_prompt(user_id, _display_name(profile))
+        history = session_memory.load_variables().get("chat_history", [])
+        return [
+            SystemMessage(content=system_prompt),
+            *history,
+            HumanMessage(content=query),
+        ]
+
+    def _run_agent(
         self, query: str, session_memory: SessionMemory, user_id: str, profile: dict | None = None
     ) -> Dict[str, Any]:
-        assert self._executor is not None
-        system_prompt = build_system_prompt(user_id, _display_name(profile))
-        try:
-            result = self._executor.invoke(
-                {
-                    "system_prompt": system_prompt,
-                    "input": query,
-                    **session_memory.load_variables(),
-                }
-            )
-            answer = result.get("output", "")
-        except Exception as e:
-            answer = f"抱歉，处理你的问题时出了点岔子：{e}"
-            result = {}  # 兜底：invoke 异常时保证 result 有值，避免后续 UnboundLocalError
-
-        # 从中间步骤提取课程卡片与讲义来源
+        assert self._agent is not None
+        set_agent_user(user_id)
+        set_my_courses_token("")  # 非流式入口不携带 JWT（与 0.3 行为一致）
         courses: List[Dict[str, Any]] = []
         sources: List[Dict[str, Any]] = []
-        for step in result.get("intermediate_steps", []):
-            action = step[0]
-            # 精确取工具名（AgentAction.tool），避免把模型日志里的字样误当工具名
-            tool_name = getattr(action, "tool", None) or getattr(action, "name", "") or ""
-            try:
-                parsed = json.loads(step[1])
-            except Exception:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            if tool_name == "course_info_query" and parsed.get("found"):
-                if isinstance(parsed.get("courses"), list):
-                    # 多次命中时聚合去重，避免后一次查询覆盖前一次卡片
-                    for c in parsed["courses"]:
-                        if not any(
-                            existing.get("id") == c.get("id") for existing in courses
-                        ):
-                            courses.append(c)
-            elif tool_name == "course_lecture_search" and parsed.get("found"):
-                items = parsed.get("items")
-                if isinstance(items, list):
-                    # 工具返回 page 字段，对外统一为 page_num
-                    sources = [
-                        {
-                            "course_id": it.get("course_id"),
-                            "course_name": it.get("course_name"),
-                            "source_file": it.get("source_file"),
-                            "page_num": it.get("page", it.get("page_num")),
-                            "text": it.get("text", ""),
-                        }
-                        for it in items
-                    ]
+        try:
+            result = self._agent.invoke(
+                {"messages": self._input_messages(query, session_memory, user_id, profile)},
+                config={"recursion_limit": RECURSION_LIMIT},
+            )
+        except Exception as e:
+            answer = f"抱歉，处理你的问题时出了点岔子：{e}"
+            return {"answer": answer, "courses": courses, "sources": sources, "mode": "agent"}
+
+        msgs: List[BaseMessage] = result.get("messages", [])
+        # 最终回答 = 最后一条 AI 消息正文
+        answer = ""
+        for m in reversed(msgs):
+            if getattr(m, "type", None) == "ai":
+                content = m.content
+                answer = content if isinstance(content, str) else str(content)
+                break
+        # 工具输出聚合：按 ToolMessage.tool_call_id 反查工具名
+        for m in msgs:
+            if getattr(m, "type", None) == "tool":
+                name = _tool_name_for_call_id(msgs, getattr(m, "tool_call_id", ""))
+                _aggregate_tool_output(name, m.content, courses, sources)
         return {"answer": answer, "courses": courses, "sources": sources, "mode": "agent"}
 
     # ------------------------------------------------------------------
@@ -238,7 +210,7 @@ class AgentCore:
                         courses = parsed["courses"]
                 except Exception:
                     pass
-            prefs = build_system_prompt(user_id, _display_name(profile)).split("该用户的长期学习偏好：")[-1].split("\n")[0]
+            prefs = get_preferences_text(user_id)
             if courses:
                 names = "、".join(c["name"] for c in courses[:3])
                 answer = (
@@ -265,146 +237,90 @@ class AgentCore:
         profile: dict | None = None,
     ) -> Dict[str, Any]:
         if settings.llm_enabled:
-            return self._run_agent_executor(query, session_memory, user_id, profile)
+            return self._run_agent(query, session_memory, user_id, profile)
         return self._run_fallback(query, session_memory, user_id, profile)
 
     # ------------------------------------------------------------------
     # 流式入口（SSE 事件序列）
     # 事件类型：thinking / answer(delta) / sources / courses / done
     # ------------------------------------------------------------------
-    def stream_run(
+    async def stream_run(
         self,
         query: str,
         user_id: str,
         session_memory: SessionMemory,
         token: str = "",
         profile: dict | None = None,
-    ):
+    ) -> AsyncIterator[Dict[str, Any]]:
         """token 为当前请求的原始 JWT（透传 Java 用户维接口）；profile 为用户画像（注入昵称）。"""
+        set_agent_user(user_id)
+        set_my_courses_token(token)
         if settings.llm_enabled:
-            yield from self._stream_agent(query, user_id, session_memory, token, profile)
+            async for ev in self._stream_agent(query, user_id, session_memory, token, profile):
+                yield ev
         else:
-            yield from self._stream_fallback(query, user_id, session_memory, profile)
+            for ev in self._stream_fallback(query, session_memory, user_id, profile):
+                yield ev
 
-    def _stream_agent(
+    async def _stream_agent(
         self,
         query: str,
         user_id: str,
         session_memory: SessionMemory,
         token: str = "",
         profile: dict | None = None,
-    ):
-        """有 Key 流式：LangChain 原生 stream() + tool_call_chunks 手动累积。
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """有 Key 流式：LangGraph astream_events(version="v3")。
 
-        依赖 create_chat_model() 透传的百炼专属参数（extra_body 里的
-        result_format=message / incremental_output=true），否则流式 chunk
-        拿不到 tool_calls。LangChain 自带的 tool_call_chunks→tool_calls 聚合
-        对百炼增量格式有 bug（末 chunk 聚合为空），这里按官方字段手动累积：
-        每轮先收 chunk，工具轮聚合调用并执行工具，最终轮实时推送正文增量。"""
+        v3 事件（Pregel 实验协议）：
+        - messages: data=(事件dict, 元数据)；content-block-delta 的 text 增量 = 流式正文；
+          content-block-finish 的 tool_call = 完整工具调用（工具由 LangGraph 自动执行）；
+        - tools: tool-finished 携带 ToolMessage 输出 → 聚合课程卡片/讲义来源；
+        - values: 每步状态快照（messages 列表），可作兜底。
+        """
+        assert self._agent is not None
         yield {"type": "thinking", "text": "正在理解问题…"}
-        system_prompt = build_system_prompt(user_id, _display_name(profile))
-        history = session_memory.load_variables().get("chat_history", [])
-        tools = [self._lecture_tool, self._course_tool] + self._pref_tools
-        if token:
-            # 请求级工具：携带当前用户 JWT，供"我的课程"查询透传 Java
-            tools = tools + [make_my_courses_tool(token)]
-        tool_map = {t.name: t for t in tools}
         courses: List[Dict[str, Any]] = []
         sources: List[Dict[str, Any]] = []
-        messages: List[BaseMessage] = [
-            SystemMessage(content=system_prompt),
-            *history,
-            HumanMessage(content=query),
-        ]
-        model = self.llm.bind_tools(tools)
-        answer_parts: List[str] = []
+        tool_names: Dict[str, str] = {}  # tool_call_id → 工具名
         try:
-            for step in range(6):
-                tool_acc: Dict[int, Dict[str, str]] = {}
-                is_tool_round = False
-                for chunk in model.stream(messages):
-                    content = getattr(chunk, "content", "")
-                    if isinstance(content, str) and content and not is_tool_round:
-                        answer_parts.append(content)
-                        yield {"type": "answer", "delta": content}
-                    # tool_call_chunks 是官方增量字段：首块带 id/name，后续块带 args 片段
-                    for tcc in getattr(chunk, "tool_call_chunks", []) or []:
-                        is_tool_round = True
-                        idx = tcc.get("index", 0)
-                        acc = tool_acc.setdefault(idx, {"name": "", "args": "", "id": ""})
-                        if tcc.get("id"):
-                            acc["id"] = tcc["id"]
-                        if tcc.get("name"):
-                            acc["name"] = tcc["name"]
-                        if tcc.get("args"):
-                            acc["args"] += tcc["args"]
-                if not is_tool_round:
-                    break  # 最终回答已流式输出完毕
-                calls = []
-                for i in sorted(tool_acc):
-                    e = tool_acc[i]
-                    if not e["name"]:
-                        continue
-                    print(f"[agent] tool_chunk name={e['name']!r} id={e['id']!r} args_raw={e['args']!r}")
-                    args = _parse_tool_args(e["args"])
-                    calls.append({"name": e["name"], "args": args, "id": e["id"]})
-                if not calls:
-                    break
-                messages.append(
-                    AIMessage(
-                        content="",
-                        tool_calls=[
-                            {"name": c["name"], "args": c["args"], "id": c["id"], "type": "tool_call"}
-                            for c in calls
-                        ],
-                    )
-                )
-                for call in calls:
-                    tool = tool_map.get(call["name"])
-                    # 规范化工具输入：兼容百炼 __arg1 / OpenAI keyword / query 等命名
-                    raw_args = call["args"] if isinstance(call["args"], dict) else {}
-                    tool_input = _first_str_arg(raw_args)[:200]
-                    if not tool_input:
-                        tool_input = "课程"
-                    if tool is None:
-                        out = json.dumps({"found": False, "message": f"未知工具: {call['name']}"}, ensure_ascii=False)
-                    else:
-                        try:
-                            out = tool.func(tool_input)
-                        except Exception as e:
-                            out = json.dumps({"found": False, "message": str(e)[:200]}, ensure_ascii=False)
-                    messages.append(ToolMessage(content=out, tool_call_id=call["id"]))
-                    try:
-                        parsed = json.loads(out)
-                    except Exception:
-                        parsed = None
-                    if call["name"] == "course_info_query" and parsed and parsed.get("found") and isinstance(parsed.get("courses"), list):
-                        # 多次命中时聚合去重，避免后一次查询覆盖前一次卡片
-                        for c in parsed["courses"]:
-                            if not any(
-                                existing.get("id") == c.get("id") for existing in courses
-                            ):
-                                courses.append(c)
-                        yield {"type": "thinking", "text": f"找到 {len(courses)} 门相关课程…"}
-                    elif call["name"] == "course_lecture_search" and parsed and parsed.get("found"):
-                        items = parsed.get("items")
-                        if isinstance(items, list):
-                            sources = [
-                                {
-                                    "course_id": it.get("course_id"),
-                                    "course_name": it.get("course_name"),
-                                    "source_file": it.get("source_file"),
-                                    "page_num": it.get("page", it.get("page_num")),
-                                    "text": it.get("text", ""),
-                                }
-                                for it in items
-                            ]
-                            yield {"type": "thinking", "text": f"检索到 {len(sources)} 条讲义片段…"}
-                    elif call["name"] in ("user_preference_update", "user_preference_read"):
-                        yield {"type": "thinking", "text": "正在读取/更新你的学习偏好…"}
+            stream = await self._agent.astream_events(
+                {"messages": self._input_messages(query, session_memory, user_id, profile)},
+                version="v3",
+                config={"recursion_limit": RECURSION_LIMIT},
+            )
+            async for ev in stream:
+                method = ev.get("method")
+                data = (ev.get("params") or {}).get("data")
+                if method == "messages" and isinstance(data, tuple):
+                    evt = data[0]
+                    e = evt.get("event")
+                    if e == "content-block-delta":
+                        delta = evt.get("delta") or {}
+                        # 文本增量：delta.type == "text-delta"（工具轮是 block-delta，忽略）
+                        if delta.get("type") == "text-delta":
+                            text = delta.get("text", "")
+                            if text:
+                                yield {"type": "answer", "delta": text}
+                    elif e == "content-block-finish":
+                        content = evt.get("content") or {}
+                        if content.get("type") == "tool_call":
+                            cid = content.get("id", "")
+                            name = content.get("name", "")
+                            if cid and name:
+                                tool_names[cid] = name
+                            yield {"type": "thinking", "text": f"正在调用工具：{name}…"}
+                elif method == "tools" and isinstance(data, dict):
+                    if data.get("event") == "tool-finished":
+                        cid = data.get("tool_call_id", "")
+                        name = tool_names.get(cid, "")
+                        out = data.get("output")
+                        out_text = getattr(out, "content", "") if out is not None else ""
+                        thinking_text = _aggregate_tool_output(name, out_text, courses, sources)
+                        if thinking_text:
+                            yield {"type": "thinking", "text": thinking_text}
         except Exception as e:
             msg = f"抱歉，处理你的问题时出了点岔子：{e}"
-            answer_parts.append(msg)
             yield {"type": "answer", "delta": msg}
         yield {"type": "done", "session_id": session_memory.session_id,
                "courses": courses, "sources": sources, "mode": "agent"}

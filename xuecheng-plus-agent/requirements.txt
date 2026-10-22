@@ -1,6 +1,6 @@
 # =============================================
 # 学成在线门户 AI 助手模块 - Python 依赖清单
-# 基于 LangChain 0.3.x（AgentExecutor 稳定可用），
+# 基于 LangChain 1.4.x（LangGraph 架构 + astream_events v3），
 # 大模型/向量化统一走阿里百炼 OpenAI 兼容模式
 # =============================================
 
@@ -8,11 +8,10 @@
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30
 
-# LangChain 生态
-langchain>=0.3.0,<0.4.0
-langchain-openai>=0.3.0,<0.4.0
-langchain-community>=0.3.0,<0.4.0
-langchain-text-splitters>=0.3.0,<0.4.0
+# LangChain 生态（1.x）
+langchain>=1.4,<2.0
+langchain-openai>=1.0,<2.0
+langchain-text-splitters>=1.0,<2.0
 
 # 向量库与检索
 chromadb>=0.5.0

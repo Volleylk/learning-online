@@ -1,21 +1,48 @@
 """Agent 工具集模块。
 
-三个标准化工具：
+五个标准化工具（LangChain 1.x @tool 装饰器风格）：
 1. course_lecture_search  课程讲义检索（RAG）
 2. course_info_query      课程信息查询（调用学成在线 Java 后端公开课程列表接口）
-3. user_preference_*      用户长期偏好读写
+3. my_courses_query       当前登录用户已选课程（JWT 透传）
+4. user_preference_read   用户长期偏好读取
+5. user_preference_update 用户长期偏好更新
+
+请求级上下文（contextvar）：
+- _user_ctx / _token_ctx 由 agent 调度入口在每次请求开始时写入，
+  工具函数内部读取，避免把 user_id / JWT 参数透传到工具构建期。
 """
 from __future__ import annotations
 
+import contextvars
 import json
+import logging
 import re
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
 import httpx
-from langchain_core.tools import Tool
+from langchain_core.tools import BaseTool, tool
 
 from app.config import settings
 from app.rag import RAGService
+
+log = logging.getLogger(__name__)
+
+# 请求级上下文（async 请求各自隔离，并发安全）
+_user_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_user_id", default="")
+_token_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_jwt", default="")
+
+# 共享 HTTP 客户端（连接池复用；httpx.Client 线程安全）
+_http = httpx.Client(timeout=8, follow_redirects=True)
+
+
+def set_agent_user(user_id: str) -> None:
+    """请求入口写入当前用户 ID（偏好工具使用）。"""
+    _user_ctx.set(user_id)
+
+
+def set_my_courses_token(token: str) -> None:
+    """请求入口写入当前 JWT（我的课程工具透传 Java）。"""
+    _token_ctx.set(token)
 
 
 def _build_course_url(course: Dict[str, Any]) -> str:
@@ -53,7 +80,7 @@ def _query_java_courses(keyword: str) -> List[Dict[str, Any]]:
         return []
     url = f"{settings.java_base_url}{settings.course_list_path}"
     try:
-        resp = httpx.get(url, params={"keyword": keyword}, timeout=8)
+        resp = _http.get(url, params={"keyword": keyword})
         resp.raise_for_status()
         data = resp.json()
         items = data.get("data", data) if isinstance(data, dict) else data
@@ -61,16 +88,19 @@ def _query_java_courses(keyword: str) -> List[Dict[str, Any]]:
             return [_normalize_course(c) for c in items]
         return []
     except Exception as e:
-        print(f"[tools] Java课程接口调用失败: {e}")
+        log.warning("Java课程接口调用失败: %s", e)
         return []
 
 
 # ---------------------------------------------------------------------------
-# 工具构造器
+# 工具构造器（@tool 装饰器风格；工具名 = 函数名，description = docstring）
 # ---------------------------------------------------------------------------
 
-def make_lecture_search_tool(rag: RAGService) -> Tool:
-    def _search(query: str) -> str:
+def make_lecture_search_tool(rag: RAGService) -> BaseTool:
+    @tool
+    def course_lecture_search(query: str) -> str:
+        """检索全站公开课程讲义的知识库。当用户询问课程知识点、概念、讲义内容时调用。
+输入：用户的问题/知识点关键词。输出：相关讲义片段（含课程名、文件名、页码）。"""
         results = rag.search(query)
         if not results:
             return json.dumps({"found": False, "message": "未检索到相关讲义片段"}, ensure_ascii=False)
@@ -86,52 +116,44 @@ def make_lecture_search_tool(rag: RAGService) -> Tool:
         ]
         return json.dumps({"found": True, "items": items}, ensure_ascii=False)
 
-    return Tool(
-        name="course_lecture_search",
-        func=_search,
-        description=(
-            "检索全站公开课程讲义的知识库。当用户询问课程知识点、概念、讲义内容时调用。"
-            "输入：用户的问题/知识点关键词。输出：相关讲义片段（含课程名、文件名、页码）。"
-        ),
-    )
+    return course_lecture_search
 
 
-def make_course_query_tool() -> Tool:
-    def _query(keyword: str) -> str:
+def make_course_query_tool() -> BaseTool:
+    @tool
+    def course_info_query(keyword: str) -> str:
+        """查询学成在线公开课程信息用于课程推荐。当用户想找课、要推荐课程、询问学什么/入门/进阶方向时调用。
+输入：课程关键词。输出：匹配的课程列表（含课程ID、名称、简介、封面、详情页URL）。"""
         courses = _query_java_courses(keyword)
-        print(f"[tools] course_info_query keyword={keyword!r} 命中={len(courses)} -> {[(c['id'], c['name']) for c in courses[:5]]}")
+        log.info("course_info_query keyword=%r 命中=%s -> %s", keyword, len(courses), [(c["id"], c["name"]) for c in courses[:5]])
         if not courses:
             return json.dumps({"found": False, "message": "未匹配到相关课程"}, ensure_ascii=False)
         return json.dumps({"found": True, "courses": courses}, ensure_ascii=False)
 
-    return Tool(
-        name="course_info_query",
-        func=_query,
-        description=(
-            "查询学成在线公开课程信息用于课程推荐。当用户想找课、要推荐课程、询问学什么/入门/进阶方向时调用。"
-            "输入：课程关键词。输出：匹配的课程列表（含课程ID、名称、简介、封面、详情页URL）。"
-        ),
-    )
+    return course_info_query
 
 
-def make_my_courses_tool(token: str) -> Tool:
+def make_my_courses_tool() -> BaseTool:
     """查询当前登录用户已选课程（learning-api /mycoursetable，JWT 透传）。
 
-    token 为空或已过期时返回明确提示，避免静默失败。
+    token 由 set_my_courses_token() 按请求写入（contextvar），空或已过期时返回明确提示。
     """
 
-    def _query(_: str = "") -> str:
+    @tool
+    def my_courses_query(input: str = "") -> str:
+        """查询当前登录用户已选/在学的课程列表（含课程名、有效期）。
+当用户问'我在学什么课''我选了哪些课''我的课程有哪些'时调用。输入任意内容即可。"""
+        token = _token_ctx.get()
         if not settings.java_base_url:
             return json.dumps({"found": False, "message": "Java网关未配置"}, ensure_ascii=False)
         if not token:
             return json.dumps({"found": False, "message": "登录态缺失，请重新登录门户"}, ensure_ascii=False)
         url = f"{settings.java_base_url}/learning/mycoursetable"
         try:
-            resp = httpx.get(
+            resp = _http.get(
                 url,
                 params={"page": 1, "size": 20},
                 headers={"Authorization": f"Bearer {token}"},
-                timeout=8,
             )
             if resp.status_code in (401, 403):
                 return json.dumps({"found": False, "message": "登录已过期，请重新登录门户"}, ensure_ascii=False)
@@ -158,47 +180,33 @@ def make_my_courses_tool(token: str) -> Tool:
                 return json.dumps({"found": False, "message": "当前还没有已选课程"}, ensure_ascii=False)
             return json.dumps({"found": True, "courses": courses}, ensure_ascii=False)
         except Exception as e:
-            print(f"[tools] 我的课程接口调用失败: {e}")
+            log.warning("我的课程接口调用失败: %s", e)
             return json.dumps({"found": False, "message": "查询我的课程失败"}, ensure_ascii=False)
 
-    return Tool(
-        name="my_courses_query",
-        func=_query,
-        description=(
-            "查询当前登录用户已选/在学的课程列表（含课程名、有效期）。"
-            "当用户问'我在学什么课''我选了哪些课''我的课程有哪些'时调用。输入任意内容即可。"
-        ),
-    )
+    return my_courses_query
 
 
-def make_preference_tools(pref_callback: Callable[[str, str], str]) -> List[Tool]:
-    """pref_callback(user_id, raw_instruction) → 处理结果文本。"""
+def make_preference_tools() -> List[BaseTool]:
+    """偏好工具：user_id 由 set_agent_user() 按请求写入（contextvar）。"""
 
-    def _read(_: str = "") -> str:
-        return pref_callback("__read__", _)
+    @tool
+    def user_preference_read(input: str = "") -> str:
+        """读取当前用户的长期学习偏好（学习阶段、解释风格、关注方向）。需要个性化回答时先调用本工具。输入任意内容即可。"""
+        user_id = _user_ctx.get()
+        return pref_handler(user_id, "__read__", input)
 
-    def _update(instruction: str) -> str:
-        return pref_callback("__update__", instruction)
+    @tool
+    def user_preference_update(instruction: str) -> str:
+        """保存用户主动告知的长期学习偏好，如'我是零基础''我喜欢通俗解释''我最近在学Java'。
+输入：用户原话。输出：更新结果。"""
+        user_id = _user_ctx.get()
+        return pref_handler(user_id, "__update__", instruction)
 
-    return [
-        Tool(
-            name="user_preference_read",
-            func=_read,
-            description="读取当前用户的长期学习偏好（学习阶段、解释风格、关注方向）。需要个性化回答时先调用本工具。输入任意内容即可。",
-        ),
-        Tool(
-            name="user_preference_update",
-            func=_update,
-            description=(
-                "保存用户主动告知的长期学习偏好，如'我是零基础''我喜欢通俗解释''我最近在学Java'。"
-                "输入：用户原话。输出：更新结果。"
-            ),
-        ),
-    ]
+    return [user_preference_read, user_preference_update]
 
 
 def pref_handler(user_id: str, action: str, instruction: str) -> str:
-    """偏好工具的实际处理逻辑（由 chat 路由注入 user_id）。"""
+    """偏好工具的实际处理逻辑（user_id 由请求上下文注入）。"""
     import app.db as db
 
     if action == "__read__":

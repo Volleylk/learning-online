@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator, List, Optional
@@ -24,6 +25,8 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
 
+log = logging.getLogger(__name__)
+
 Base = declarative_base()
 
 
@@ -35,6 +38,7 @@ class ChatHistory(Base):
     session_id = Column(String(64), nullable=False, index=True)
     role = Column(String(16), nullable=False)          # user / assistant
     content = Column(Text, nullable=False)
+    courses = Column(Text, nullable=True)              # 课程卡片 JSON 列表（assistant 消息携带）
     created_at = Column(DateTime, nullable=False, default=datetime.now)
 
     __table_args__ = (
@@ -109,17 +113,45 @@ def init_db() -> None:
     finally:
         conn.close()
     Base.metadata.create_all(engine)
+    _migrate_chat_history_courses()
+
+
+def _migrate_chat_history_courses() -> None:
+    """老库补列：chat_history.courses（幂等）。"""
+    from sqlalchemy import text as sa_text
+
+    with session_scope() as session:
+        exists = session.execute(
+            sa_text(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = :db AND TABLE_NAME = 'chat_history' AND COLUMN_NAME = 'courses'"
+            ),
+            {"db": settings.mysql_db},
+        ).scalar()
+        if not exists:
+            session.execute(sa_text("ALTER TABLE chat_history ADD COLUMN courses TEXT NULL"))
+            log.info("chat_history.courses 列已添加（迁移）")
 
 
 # ---------------------------------------------------------------------------
 # 短期对话记忆
 # ---------------------------------------------------------------------------
 
-def save_chat_turn(user_id: str, session_id: str, role: str, content: str) -> None:
+def save_chat_turn(
+    user_id: str,
+    session_id: str,
+    role: str,
+    content: str,
+    courses: list | None = None,
+) -> None:
     with session_scope() as session:
         session.add(
             ChatHistory(
-                user_id=user_id, session_id=session_id, role=role, content=content
+                user_id=user_id,
+                session_id=session_id,
+                role=role,
+                content=content,
+                courses=json.dumps(courses, ensure_ascii=False) if courses else None,
             )
         )
 
@@ -135,7 +167,14 @@ def load_chat_history(user_id: str, session_id: str, max_turns: int = 20) -> Lis
             .all()
         )
     rows.reverse()
-    return [{"role": r.role, "content": r.content} for r in rows]
+    return [
+        {
+            "role": r.role,
+            "content": r.content,
+            "courses": json.loads(r.courses) if r.courses else None,
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
