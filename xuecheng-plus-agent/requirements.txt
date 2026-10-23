@@ -16,6 +16,7 @@ langchain-text-splitters>=1.0,<2.0
 # 向量库与检索
 chromadb>=0.5.0
 rank-bm25>=0.2.2
+jieba>=0.42
 
 # 数据库（MySQL）
 SQLAlchemy>=2.0,<2.1

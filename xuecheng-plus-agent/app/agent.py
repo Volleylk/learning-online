@@ -30,6 +30,7 @@ from app.tools import (
     pref_handler,
     set_agent_user,
     set_my_courses_token,
+    set_query_history,
 )
 
 # 找课意图关键词（降级模式判断用）
@@ -96,6 +97,18 @@ def _aggregate_tool_output(name: str, out_text: str, courses: List[Dict], source
     return ""
 
 
+def _history_text(session_memory: SessionMemory) -> str:
+    """取最近对话历史纯文本（查询改写/对话补全用；失败返回空串）。"""
+    try:
+        msgs = session_memory.load_variables().get("chat_history", [])
+    except Exception:
+        return ""
+    return "\n".join(
+        f"{m.type}: {m.content if isinstance(m.content, str) else str(m.content)}"
+        for m in msgs[-4:]
+    )
+
+
 class AgentCore:
     def __init__(
         self,
@@ -106,7 +119,8 @@ class AgentCore:
         self.rag = rag
         self.llm = llm
         self._course_tool = make_course_query_tool()
-        self._lecture_tool = make_lecture_search_tool(rag)
+        # 查询重写（含对话补全）仅真实百炼 Key 时启用；降级模型不参与改写
+        self._lecture_tool = make_lecture_search_tool(rag, llm if settings.llm_enabled else None)
         self._pref_tools = preference_tools or make_preference_tools()
         self._agent = None
         if settings.llm_enabled:
@@ -147,6 +161,7 @@ class AgentCore:
         assert self._agent is not None
         set_agent_user(user_id)
         set_my_courses_token("")  # 非流式入口不携带 JWT（与 0.3 行为一致）
+        set_query_history(_history_text(session_memory))  # 讲义检索前对话补全/查询改写
         courses: List[Dict[str, Any]] = []
         sources: List[Dict[str, Any]] = []
         try:
@@ -255,6 +270,7 @@ class AgentCore:
         """token 为当前请求的原始 JWT（透传 Java 用户维接口）；profile 为用户画像（注入昵称）。"""
         set_agent_user(user_id)
         set_my_courses_token(token)
+        set_query_history(_history_text(session_memory))  # 讲义检索前对话补全/查询改写
         if settings.llm_enabled:
             async for ev in self._stream_agent(query, user_id, session_memory, token, profile):
                 yield ev

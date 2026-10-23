@@ -19,7 +19,7 @@ xuecheng-plus-agent/
 │   ├── llm.py                  # 百炼大模型/向量化封装（embedding 指数退避；含无Key降级）
 │   ├── db.py                   # MySQL：chat_history（含 courses 卡片列）/ user_preferences
 │   ├── memory.py               # 短期对话记忆 + 长期偏好 + 自动压缩 + 内存上限裁剪
-│   ├── rag.py                  # Chroma 向量库：入库 + 混合检索（向量+BM25+RRF）+ 阈值过滤
+│   ├── rag.py                  # Chroma：父子分块入库（标题注入）+ 混合检索（向量+BM25+RRF+rerank）+ 健壮性
 │   ├── tools.py                # Agent 工具（@tool）：讲义检索 / 课程推荐 / 我的课程 / 偏好管理
 │   ├── agent.py                # Agent 调度核心（LangGraph create_agent + v3 事件流式 + 降级）
 │   ├── minio_client.py         # MinIO 下载/上传
@@ -32,7 +32,8 @@ xuecheng-plus-agent/
 │   │   └── preferences.py      # /api/preferences（偏好读写）
 │   └── static/                 # 聊天前端页面（HTML/CSS/JS：Markdown 渲染 + 课程卡片 + 历史会话侧栏）
 ├── scripts/
-│   └── get_token.py            # 生成测试 JWT
+│   ├── get_token.py            # 生成测试 JWT
+│   └── eval_rag.py             # RAG 检索质量评估（Recall@K，贯穿验证用）
 ├── docs/
 │   └── 对接文档.md             # Java 侧对接说明（JWT 约定 / 讲义链路 / 新接口）
 ├── venv/                       # Python 虚拟环境（3.13）
@@ -91,7 +92,7 @@ venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 1. Java 侧（media-api）上传讲义 → 存入 MinIO（bucket `lecture`），讲义解析状态表新增记录（processing）
 2. Java 侧发 RabbitMQ 消息（topic 交换机 `xc.lecture`，路由键 `lecture.upload`，队列 `xc.lecture.parse`）
-3. AI 服务串行消费（prefetch=1）→ 下载 MinIO 文件 → 提取文本（PDF/DOCX/TXT/MD）→ 递归切分 → 百炼向量化 → 写入 Chroma（按 file_hash 去重，重复上传覆盖旧切片）
+3. AI 服务串行消费（prefetch=1）→ 下载 MinIO 文件 → 提取文本（PDF/DOCX/TXT/MD）→ **父子分块**（大块 800 字 / 小块 200 字，小块入库、检索命中小块后归并回大块）+ **标题注入**（课程名/文件名拼入向量输入，Chroma 存正文原文）→ jieba 分词 → 百炼向量化 → 写入 Chroma（按 file_hash 去重，重复上传覆盖旧切片）
 4. 处理完回调 Java 接口（`POST {JAVA_BASE_URL}/api/lecture/parse-status`）：`{"fileId":"xx","status":"success|failed","message":"..."}`，Java 侧写入状态表（xcplus_media.lecture_parse_status）
 5. 教学机构端轮询查询：media-api `GET /api/lecture/parse-status/list?courseId=`（agent 提供 `/api/lecture/*` 转发路由）
 
@@ -107,13 +108,16 @@ venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `MINIO_*` | MinIO 地址 / bucket `lecture` |
 | `JAVA_BASE_URL` | Java 后端地址（课程推荐 / 解析状态回调） |
 | `CHROMA_PATH` / `RAG_TOP_K` / `RAG_MAX_DISTANCE` | 向量库路径、召回数、相似度阈值过滤（默认 0.7） |
+| `PARENT_CHUNK_SIZE` / `CHILD_CHUNK_SIZE` | 父子分块尺寸（默认 800 / 200，overlap 80 / 30） |
+| `RAG_RERANK` / `RERANK_MODEL` | 精排开关 / 模型（`qwen3-rerank`，百炼原生协议；调用失败自动降级 RRF 原序） |
+| `QUERY_REWRITE_ENABLED` | 讲义检索前 LLM 查询改写 + 对话补全指代（默认开，改写失败退回原查询） |
 | `MEMORY_MAX_MESSAGES` | 单会话内存缓冲消息数上限（默认 40，超出裁剪最旧；DB 全量保留） |
 
 ## 六、Agent 工具（LangGraph 固定注册 + contextvar 注入）
 
 | 工具 | 说明 | 请求级数据 |
 |---|---|---|
-| `course_lecture_search` | 讲义 RAG 检索（带来源课程/页码） | — |
+| `course_lecture_search` | 讲义 RAG 检索：查询改写（LLM 改写 + 对话补全指代）→ 双路召回合并 → 返回大块（含来源课程/页码） | `set_query_history(history)` 注入最近对话 |
 | `course_info_query` | 公开课程推荐（走 Java 课程列表接口，httpx 连接池复用） | — |
 | `my_courses_query` | "我的课程"（走网关 `/learning/mycoursetable`，**透传当前用户原始 JWT**） | `set_my_courses_token(token)` 注入 |
 | `user_preference_read` / `user_preference_update` | 长期偏好读写 | `set_agent_user(user_id)` 注入 |
@@ -130,7 +134,11 @@ venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ## 八、核心设计点
 
 - **JWT 单次解码**：`get_auth_context` 一次解码同时产出 user_id / 原始 token / 用户画像，替代三次依赖重复解码；门户 JWT 用户身份在 `user_name`（XcUserExt JSON），兼容早期 `sub/user_id/uid/userId`，显示名优先级：昵称 > 姓名 > 用户名
-- **混合检索**：向量语义召回（相似度阈值过滤 `rag_max_distance=0.7`）+ BM25 关键词召回（轻量中文单字分词）→ RRF 融合去重（k=60）→ TopN
+- **混合检索**：向量语义召回（阈值过滤 `rag_max_distance=0.7`，embedding 失败自动降级 BM25-only）+ BM25 关键词召回（**jieba 分词 + 停用词过滤**）→ RRF 融合去重（k=60）→ **qwen3-rerank 精排**（失败降级 RRF 原序）→ **来源去重**（同一讲义最多 2 条）→ TopN
+- **父子分块**：入库切大块（800 字）+ 小块（200 字）；小块入库检索，命中小块归并回大块喂 LLM，同一大块只保留最高分小块，避免重复回传
+- **查询重写**：讲义检索工具调用前由 LLM 改写查询（补全"它/这个/那门课"等指代），改写结果与原查询双路召回合并去重
+- **迭代检索**：LangGraph 工具循环天然支持多轮检索（recursion_limit=30），系统提示显式授权"信息不足可换一种问法再次检索"
+- **检索健壮性**：空库防御 / `count + dirty` 双对账（修复"删N加N后 count 不变"导致的 BM25 与库不一致盲区）/ refresh 失败保留旧索引继续服务
 - **记忆分层**：短期会话记忆（内存缓冲 + 自动压缩 SummarizationMiddleware，token 超阈值调大模型摘要）+ 长期偏好记忆（MySQL 持久化）+ 内存上限裁剪（`memory_max_messages`，DB 全量保留用于审计）
 - **SSE 心跳**：无事件超 15s 补发注释型 ping，防代理/网关掐断长连接
 - **串行消费**：RabbitMQ prefetch=1，逐份处理讲义，坏消息 ack 丢弃、临时错误 nack 重试一次，避免死循环刷屏

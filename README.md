@@ -6,7 +6,7 @@
 
 - **微服务 + AI 双栈**：Java 微服务作为业务底座，Python Agent 作为智能层，通过网关 + JWT 透传打通两侧
 - **讲义智能解析全链路**：机构端上传讲义 → MinIO 存储 + RabbitMQ 消息 → Agent 异步解析 → Chroma 向量入库 → 状态持久化 → 前端轮询
-- **RAG 讲义知识问答**：基于向量检索 + 相似度阈值过滤，回答可溯源到课程/页码
+- **高级 RAG 讲义知识问答**：父子分块 + 标题注入入库，向量 / BM25（jieba）双路召回 → RRF 融合 → qwen3-rerank 精排，回答可溯源到课程/页码
 - **LLM 工具调用闭环**：Agent 自主决策调用课程推荐、"我的课程"（带 JWT 透传网关）等工具，结果回传后组织回答
 - **流式对话 + 记忆管理**：SSE 流式输出；短期会话记忆 + 长期偏好记忆 + 自动压缩
 
@@ -125,8 +125,8 @@ sequenceDiagram
     M->>Q: 发消息（exchange=xc.lecture, routingKey=lecture.upload）
     M-->>F: 返回 fileId，前端开始轮询
     Q->>A: 消费解析消息
-    A->>A: 调用 LLM 解析讲义内容
-    A->>C: 切片向量入库（按 file_hash 去重）
+    A->>A: 提取文本（PDF/DOCX/TXT/MD）+ 父子分块 + 标题注入
+    A->>C: 切片向量入库（jieba 分词，按 file_hash 去重）
     A->>D: 更新解析状态（lecture_parse_status）
     F->>M: GET /media/api/lecture/parse-status/list（轮询）
     M-->>F: 解析状态（processing → success / failed）
@@ -200,7 +200,7 @@ sequenceDiagram
 
 - **MQ 发布确认（publisher confirm）**：Spring Boot 2.3.7 无 `setPublisherConfirmType` API，需重写 `RabbitTemplate` Bean；消息可靠性通过 confirm 回调 + 业务状态表兜底。
 - **JWT 兼容解析**：门户 JWT 用户身份在 `user_name`（XcUserExt JSON），兼容早期 `sub/user_id/uid/userId`；agent 侧统一解析并提取昵称/姓名注入系统提示，支持"我是谁"等个性化问答。
-- **RAG 检索质量控制**：向量召回加相似度阈值过滤（`rag_max_distance=0.7`），按 `file_hash` 去重，避免无效切片进入回答。
+- **高级 RAG 检索链路**：入库走父子分块（大块 800 / 小块 200，小块入库、检索回传大块）+ 标题注入；检索走向量语义召回（阈值过滤 + embedding 失败降级 BM25-only）+ BM25 关键词召回（jieba + 停用词）→ RRF 融合（k=60）→ qwen3-rerank 精排（失败降级粗排）→ 来源去重（同讲义最多 2 条）；工具层再叠加 LLM 查询改写（对话补全指代）与迭代检索（信息不足换问法再查），`scripts/eval_rag.py` 提供 Recall@K 贯穿评估。
 - **v3 事件协议要点**：LangChain 1.x `astream_events(version="v3")` 中，文本增量在 `content-block-delta` 的 `delta.type=="text-delta"`（不是 `"text"`）；工具调用在 `content-block-finish`（结构化 args）；工具结果在 `tools` method 的 `tool-finished`（ToolMessage）——agent 按 `tool_call_id` 反查工具名聚合课程卡片/讲义来源。
 - **讲义状态持久化**：解析状态落 MySQL（`lecture_parse_status`），`update_time` 时区统一 Asia/Shanghai，前端可轮询展示"解析中 / 成功 / 失败"。
 

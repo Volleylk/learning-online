@@ -23,13 +23,15 @@ import httpx
 from langchain_core.tools import BaseTool, tool
 
 from app.config import settings
-from app.rag import RAGService
+from app.rag import RAGService, _coerce_query_text
 
 log = logging.getLogger(__name__)
 
 # 请求级上下文（async 请求各自隔离，并发安全）
 _user_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_user_id", default="")
 _token_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_jwt", default="")
+# 最近对话历史（讲义检索前查询改写/对话补全指代用）
+_history_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("agent_history", default="")
 
 # 共享 HTTP 客户端（连接池复用；httpx.Client 线程安全）
 _http = httpx.Client(timeout=8, follow_redirects=True)
@@ -43,6 +45,11 @@ def set_agent_user(user_id: str) -> None:
 def set_my_courses_token(token: str) -> None:
     """请求入口写入当前 JWT（我的课程工具透传 Java）。"""
     _token_ctx.set(token)
+
+
+def set_query_history(history_text: str) -> None:
+    """请求入口写入最近对话历史（讲义检索前做查询改写/指代补全）。"""
+    _history_ctx.set(history_text)
 
 
 def _build_course_url(course: Dict[str, Any]) -> str:
@@ -96,12 +103,60 @@ def _query_java_courses(keyword: str) -> List[Dict[str, Any]]:
 # 工具构造器（@tool 装饰器风格；工具名 = 函数名，description = docstring）
 # ---------------------------------------------------------------------------
 
-def make_lecture_search_tool(rag: RAGService) -> BaseTool:
+def _extract_content_text(content) -> str:
+    """从 LLM 响应 content（str 或 content-block 列表）提取纯文本。
+
+    兼容新版模型的 content=[{'type':'text','text':...}] 结构，避免 str(list) 变成 repr。
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(c.get("text", "")) if isinstance(c, dict) else str(c)
+            for c in content
+        )
+    return str(content or "")
+
+
+def _rewrite_query(llm, query: str, history: str) -> str:
+    """查询改写 + 对话补全：补全指代（它/这个/那门课），转成适合讲义检索的关键词查询。
+
+    改写失败或结果为空/与原句相同 → 返回原查询（不阻断检索）。
+    """
+    try:
+        prompt = (
+            "你是检索查询改写器。把下面的用户问题改写成更适合讲义知识库检索的关键词查询。"
+            "如果问题中有指代（它、这、那个、这门课等），结合最近的对话历史补全成具体名词。"
+            "只输出改写后的查询文本，不要解释、不要加引号。\n"
+            f"最近对话历史：{history}\n"
+            f"用户问题：{query}\n"
+            "改写后的查询："
+        )
+        resp = llm.invoke(prompt)
+        rewritten = _extract_content_text(resp.content).strip().strip('"').strip()
+        return rewritten if rewritten and rewritten != query else query
+    except Exception as e:
+        log.warning("查询改写失败，使用原查询: %s", e)
+        return query
+
+
+def make_lecture_search_tool(rag: RAGService, llm=None) -> BaseTool:
     @tool
     def course_lecture_search(query: str) -> str:
         """检索全站公开课程讲义的知识库。当用户询问课程知识点、概念、讲义内容时调用。
 输入：用户的问题/知识点关键词。输出：相关讲义片段（含课程名、文件名、页码）。"""
+        query = _coerce_query_text(query)   # 兼容 content-block 数组参数，归一化为纯文本
+        # 查询改写（含对话补全）：改写失败/无模型时退回原查询
+        rewritten = query
+        if settings.query_rewrite_enabled and llm is not None:
+            rewritten = _rewrite_query(llm, query, _history_ctx.get())
         results = rag.search(query)
+        if rewritten and rewritten != query:
+            extra = rag.search(rewritten)
+            merged: Dict[str, Dict] = {r["id"]: r for r in results}
+            for r in extra:
+                merged.setdefault(r["id"], r)
+            results = list(merged.values())[: max(len(results), 1)]
         if not results:
             return json.dumps({"found": False, "message": "未检索到相关讲义片段"}, ensure_ascii=False)
         items = [

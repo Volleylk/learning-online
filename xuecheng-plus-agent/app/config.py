@@ -1,10 +1,15 @@
 """全局配置：从 .env / 环境变量加载，所有模块共享 settings 单例。"""
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 项目根 = 本文件上一级；用绝对路径定位 .env，避免从不同 cwd 启动时静默丢失配置
+_BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=str(_BASE_DIR / ".env"), env_file_encoding="utf-8", extra="ignore"
     )
 
     # 服务
@@ -63,7 +68,8 @@ class Settings(BaseSettings):
     memory_max_messages: int = 40
 
     # RAG
-    chroma_path: str = "data/chroma"
+    # 用 __file__ 推导的绝对路径：避免从不同 cwd 启动时把库建到别处（与 .env 定位同款修复）
+    chroma_path: str = str(_BASE_DIR / "data" / "chroma")
     chroma_collection: str = "course_lectures"
     rag_top_k: int = 4
     # 向量召回相似度阈值（Chroma cosine 空间 distance=1-cos，0.7≈相似度0.3）；
@@ -72,6 +78,23 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 50
     rrf_k: int = 60
+
+    # 父子分块（入库切大块 + 小块，检索命中小块后回传大块喂 LLM）
+    parent_chunk_size: int = 800
+    parent_chunk_overlap: int = 80
+    child_chunk_size: int = 200
+    child_chunk_overlap: int = 30
+
+    # RAG 精排（rerank，百炼 qwen3-rerank；gte-rerank 已下线勿用）
+    rag_rerank: bool = True
+    rerank_model: str = "qwen3-rerank"
+    rerank_timeout: int = 10
+    # 百炼原生 API 基址（rerank 走 DashScope 原生协议，与 OpenAI 兼容端点不同；
+    # 若调用报错，按控制台提示换成 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1）
+    rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+
+    # 查询重写（讲义检索前 LLM 改写 + 对话补全指代）
+    query_rewrite_enabled: bool = True
 
     @property
     def llm_enabled(self) -> bool:
