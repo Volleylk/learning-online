@@ -4,6 +4,7 @@ import com.alibaba.fastjson.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.xuecheng.base.exception.CommonError;
 import com.xuecheng.base.exception.XueChengPlusException;
+import com.xuecheng.content.config.ContentRabbitConfig;
 import com.xuecheng.content.mapper.CourseBaseMapper;
 import com.xuecheng.content.mapper.CourseMarketMapper;
 import com.xuecheng.content.mapper.CoursePublishMapper;
@@ -31,12 +32,15 @@ import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.ui.freemarker.FreeMarkerTemplateUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -75,6 +79,8 @@ public class CoursePublishServiceImpl implements CoursePublishService {
     private  final MqMessageService mqMessageService;
 
     private final MediaServiceClient mediaServiceClient;
+
+    private final RabbitTemplate rabbitTemplate;
 
     @Override
     @Cacheable(cacheNames = "course:preview", key = "#courseId")
@@ -344,5 +350,17 @@ public class CoursePublishServiceImpl implements CoursePublishService {
         if(mqMessage==null){
             XueChengPlusException.cast(CommonError.UNKOWN_ERROR);
         }
+        // 事务提交后再发送 MQ 消息：mq_message 表落库（可追溯/可重发） + 真正投递 RabbitMQ
+        // 消费者按 messageId 查表处理，stage 幂等保证重复投递不重复执行
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                Map<String, Object> body = new HashMap<>();
+                body.put("messageId", mqMessage.getId());
+                rabbitTemplate.convertAndSend(ContentRabbitConfig.PUBLISH_EXCHANGE,
+                        ContentRabbitConfig.PUBLISH_ROUTING_KEY, JSON.toJSONString(body));
+                log.debug("课程发布消息已发送, messageId:{}", mqMessage.getId());
+            }
+        });
     }
 }

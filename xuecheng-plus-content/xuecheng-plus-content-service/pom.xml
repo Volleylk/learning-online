@@ -19,6 +19,11 @@
             <artifactId>xuecheng-plus-message-sdk</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <!-- RabbitMQ：课程发布/静态化异步消息（可靠消息） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
@@ -46,10 +51,6 @@
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.xuxueli</groupId>
-            <artifactId>xxl-job-core</artifactId>
         </dependency>
 
         <!-- commons-fileupload（MultipartSupportConfig 使用） -->

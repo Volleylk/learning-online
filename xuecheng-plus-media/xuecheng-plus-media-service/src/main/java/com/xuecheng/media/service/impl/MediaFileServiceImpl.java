@@ -8,6 +8,7 @@ import com.xuecheng.base.exception.XueChengPlusException;
 import com.xuecheng.base.model.PageParams;
 import com.xuecheng.base.model.PageResult;
 import com.xuecheng.base.model.RestResponse;
+import com.xuecheng.media.config.MediaRabbitConfig;
 import com.xuecheng.media.mapper.MediaFilesMapper;
 import com.xuecheng.media.mapper.MediaProcessMapper;
 import com.xuecheng.media.model.dto.QueryMediaParamsDto;
@@ -24,12 +25,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.io.IOUtils;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -58,6 +62,8 @@ public class MediaFileServiceImpl implements MediaFileService {
     private final ApplicationContext applicationContext;
 
     private final MediaProcessMapper mediaProcessMapper;
+
+    private final RabbitTemplate rabbitTemplate;
 
 
     //普通文件桶
@@ -340,6 +346,16 @@ public class MediaFileServiceImpl implements MediaFileService {
             mediaProcess.setStatus("1");//未处理
             mediaProcess.setFailCount(0);//失败次数默认为0
             mediaProcessMapper.insert(mediaProcess);
+            // 事务提交后再发送 MQ 消息：避免消费者抢在事务提交前查不到 media_process 记录
+            // （生产者 confirm + 队列持久化 + 手动 ack + 状态机幂等 保证消息可靠）
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    rabbitTemplate.convertAndSend(MediaRabbitConfig.TRANSCODE_EXCHANGE,
+                            MediaRabbitConfig.TRANSCODE_ROUTING_KEY, String.valueOf(mediaProcess.getId()));
+                    log.debug("视频转码消息已发送, mediaProcessId:{}", mediaProcess.getId());
+                }
+            });
         }
     }
 }

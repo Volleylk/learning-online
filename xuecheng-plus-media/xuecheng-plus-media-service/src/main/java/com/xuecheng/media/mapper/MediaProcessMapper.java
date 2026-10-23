@@ -34,4 +34,12 @@ public interface MediaProcessMapper extends BaseMapper<MediaProcess> {
     @Update("update media_process m set m.status='4' where (m.status='1' or m.status='3') and m.fail_count<3 and m.id=#{id}")
     int startTask(@Param("id")long id);
 
+    /**
+     * 兜底补偿：卡死任务（处理中超时）重置为待处理，仅当仍处于处理中状态时生效（乐观，防重复补偿）
+     * @param id 任务id
+     * @return 更新记录数
+     */
+    @Update("update media_process m set m.status='1' where m.status='4' and m.id=#{id}")
+    int resetStatus(@Param("id")long id);
+
 }
