@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "description": "学成在线 AI 助手 RAG 评测集：6 份演示讲义 × 8 题 = 48 题",
+    "created": "2026-10-23",
+    "judge_model": "qwen3.8-max",
+    "metric_note": "kw=期望关键词（命中任一即算召回）；expected_file=期望命中的讲义文件（用于跨课误召回校验）"
+  },
+  "cases": [
+    {"id": 1, "course_id": 120, "q": "面向对象编程的三大基本特性是什么", "kw": ["封装", "继承", "多态"], "expected_file": "Java面向对象三大特性.txt", "note": "概念题：三大特性枚举"},
+    {"id": 2, "course_id": 120, "q": "Java中封装通过什么修饰符控制成员可见性", "kw": ["private", "访问修饰符"], "expected_file": "Java面向对象三大特性.txt", "note": "细节题：访问修饰符"},
+    {"id": 3, "course_id": 120, "q": "Java中使用什么关键字实现继承，继承有什么特点", "kw": ["extends", "单继承"], "expected_file": "Java面向对象三大特性.txt", "note": "细节题：extends 与单继承"},
+    {"id": 4, "course_id": 120, "q": "多态的三个必要条件是什么", "kw": ["继承", "方法重写", "父类引用"], "expected_file": "Java面向对象三大特性.txt", "note": "枚举题：多态三条件"},
+    {"id": 5, "course_id": 120, "q": "里氏替换原则的内容是什么", "kw": ["里氏替换", "子类", "父类"], "expected_file": "Java面向对象三大特性.txt", "note": "概念题：设计原则"},
+    {"id": 6, "course_id": 120, "q": "开闭原则的含义是什么", "kw": ["开闭原则", "扩展开放", "修改关闭"], "expected_file": "Java面向对象三大特性.txt", "note": "概念题：设计原则"},
+    {"id": 7, "course_id": 120, "q": "为什么说Java的继承是单继承", "kw": ["单继承", "一个父类"], "expected_file": "Java面向对象三大特性.txt", "note": "细节题：单继承限制"},
+    {"id": 8, "course_id": 120, "q": "良好的Java类设计如何配合三大特性", "kw": ["封装保护数据", "继承复用", "多态扩展"], "expected_file": "Java面向对象三大特性.txt", "note": "应用题：设计配合"},
+
+    {"id": 9, "course_id": 121, "q": "什么是微服务架构", "kw": ["独立服务", "独立部署", "独立扩展"], "expected_file": "微服务架构与SpringCloud.txt", "note": "概念题：架构定义"},
+    {"id": 10, "course_id": 121, "q": "微服务架构相比单体架构的优势是什么", "kw": ["独立部署", "独立扩展", "技术栈灵活"], "expected_file": "微服务架构与SpringCloud.txt", "note": "对比题：微服务 vs 单体"},
+    {"id": 11, "course_id": 121, "q": "注册中心在服务发现中起什么作用", "kw": ["注册中心", "实例列表", "注册"], "expected_file": "微服务架构与SpringCloud.txt", "note": "概念题：服务发现"},
+    {"id": 12, "course_id": 121, "q": "Nacos是什么，有什么功能", "kw": ["Nacos", "注册中心", "配置中心"], "expected_file": "微服务架构与SpringCloud.txt", "note": "枚举题：中间件功能"},
+    {"id": 13, "course_id": 121, "q": "网关在微服务架构中的作用是什么", "kw": ["网关", "路由", "转发"], "expected_file": "微服务架构与SpringCloud.txt", "note": "概念题：统一入口"},
+    {"id": 14, "course_id": 121, "q": "Spring Cloud的核心组件有哪些", "kw": ["OpenFeign", "Sentinel", "Nacos"], "expected_file": "微服务架构与SpringCloud.txt", "note": "枚举题：组件清单"},
+    {"id": 15, "course_id": 121, "q": "OpenFeign提供了什么能力", "kw": ["OpenFeign", "负载均衡"], "expected_file": "微服务架构与SpringCloud.txt", "note": "细节题：远程调用"},
+    {"id": 16, "course_id": 121, "q": "Sentinel的三大能力是什么", "kw": ["流量控制", "熔断降级", "系统保护"], "expected_file": "微服务架构与SpringCloud.txt", "note": "枚举题：Sentinel能力"},
+
+    {"id": 17, "course_id": 130, "q": "函数极限的定义是什么", "kw": ["极限", "趋近", "常数"], "expected_file": "高等数学：导数与极限.txt", "note": "概念题：极限定义"},
+    {"id": 18, "course_id": 130, "q": "极限的四则运算法则是什么", "kw": ["和的极限", "商的极限", "积的极限"], "expected_file": "高等数学：导数与极限.txt", "note": "枚举题：四则运算"},
+    {"id": 19, "course_id": 130, "q": "第一个重要极限是什么", "kw": ["sinx/x", "1"], "expected_file": "高等数学：导数与极限.txt", "note": "细节题：重要极限"},
+    {"id": 20, "course_id": 130, "q": "第二个重要极限的结论是什么", "kw": ["e", "自然对数"], "expected_file": "高等数学：导数与极限.txt", "note": "细节题：e 极限"},
+    {"id": 21, "course_id": 130, "q": "导数的定义是什么", "kw": ["增量之比", "瞬时变化率", "极限"], "expected_file": "高等数学：导数与极限.txt", "note": "概念题：导数定义"},
+    {"id": 22, "course_id": 130, "q": "导数的几何意义是什么", "kw": ["切线", "斜率"], "expected_file": "高等数学：导数与极限.txt", "note": "细节题：几何意义"},
+    {"id": 23, "course_id": 130, "q": "复合函数求导的链式法则是什么", "kw": ["链式法则", "外层函数", "内层函数"], "expected_file": "高等数学：导数与极限.txt", "note": "方法题：链式求导"},
+    {"id": 24, "course_id": 130, "q": "可导与连续的关系是什么", "kw": ["可导", "连续", "不可导"], "expected_file": "高等数学：导数与极限.txt", "note": "关系题：可导与连续"},
+
+    {"id": 25, "course_id": 131, "q": "栈的进出原则是什么", "kw": ["后进先出", "LIFO"], "expected_file": "数据结构与算法基础.txt", "note": "概念题：栈"},
+    {"id": 26, "course_id": 131, "q": "队列的进出原则是什么", "kw": ["先进先出", "FIFO"], "expected_file": "数据结构与算法基础.txt", "note": "概念题：队列"},
+    {"id": 27, "course_id": 131, "q": "数组随机访问的时间复杂度是多少", "kw": ["O(1)", "随机访问"], "expected_file": "数据结构与算法基础.txt", "note": "细节题：数组复杂度"},
+    {"id": 28, "course_id": 131, "q": "二叉搜索树的结点值有什么规律", "kw": ["左子树", "右子树", "根结点"], "expected_file": "数据结构与算法基础.txt", "note": "概念题：BST性质"},
+    {"id": 29, "course_id": 131, "q": "二叉树中序遍历的顺序是什么", "kw": ["左根右", "中序遍历"], "expected_file": "数据结构与算法基础.txt", "note": "细节题：遍历顺序"},
+    {"id": 30, "course_id": 131, "q": "快速排序的平均时间复杂度是多少，用什么思想", "kw": ["O(nlogn)", "分治"], "expected_file": "数据结构与算法基础.txt", "note": "细节题：快排"},
+    {"id": 31, "course_id": 131, "q": "使用二分查找的前提条件是什么", "kw": ["有序", "二分"], "expected_file": "数据结构与算法基础.txt", "note": "概念题：二分前提"},
+    {"id": 32, "course_id": 131, "q": "邻接矩阵适合存储什么样的图", "kw": ["邻接矩阵", "稠密图"], "expected_file": "数据结构与算法基础.txt", "note": "细节题：图存储"},
+
+    {"id": 33, "course_id": 132, "q": "现在完成时的结构是什么", "kw": ["have", "过去分词", "since"], "expected_file": "大学英语（一）.txt", "note": "语法题：现在完成时"},
+    {"id": 34, "course_id": 132, "q": "过去完成时表示什么", "kw": ["had", "过去的过去"], "expected_file": "大学英语（一）.txt", "note": "语法题：过去完成时"},
+    {"id": 35, "course_id": 132, "q": "与现在事实相反的虚拟语气怎么构成", "kw": ["were", "would"], "expected_file": "大学英语（一）.txt", "note": "语法题：虚拟语气"},
+    {"id": 36, "course_id": 132, "q": "被动语态的基本结构是什么", "kw": ["be", "过去分词"], "expected_file": "大学英语（一）.txt", "note": "语法题：被动语态"},
+    {"id": 37, "course_id": 132, "q": "定语从句中关系代词which指代什么", "kw": ["which", "物"], "expected_file": "大学英语（一）.txt", "note": "语法题：定语从句"},
+    {"id": 38, "course_id": 132, "q": "动名词作主语是什么用法", "kw": ["Reading", "动名词"], "expected_file": "大学英语（一）.txt", "note": "语法题：非谓语"},
+    {"id": 39, "course_id": 132, "q": "It is加形容词加for sb to do句型是什么意思", "kw": ["It is", "for sb", "to do"], "expected_file": "大学英语（一）.txt", "note": "句型题：常用句型"},
+    {"id": 40, "course_id": 132, "q": "the more the more 句型表示什么", "kw": ["The more", "the better"], "expected_file": "大学英语（一）.txt", "note": "句型题：比较级"},
+
+    {"id": 41, "course_id": 133, "q": "OSI参考模型分为哪七层", "kw": ["物理层", "数据链路层", "应用层"], "expected_file": "计算机网络原理.txt", "note": "枚举题：七层模型"},
+    {"id": 42, "course_id": 133, "q": "TCP三次握手的过程是什么", "kw": ["SYN", "ACK", "三次握手"], "expected_file": "计算机网络原理.txt", "note": "流程题：三次握手"},
+    {"id": 43, "course_id": 133, "q": "TCP四次挥手的过程是什么", "kw": ["FIN", "四次挥手"], "expected_file": "计算机网络原理.txt", "note": "流程题：四次挥手"},
+    {"id": 44, "course_id": 133, "q": "TCP和UDP有什么区别", "kw": ["面向连接", "无连接", "可靠传输"], "expected_file": "计算机网络原理.txt", "note": "对比题：TCP vs UDP"},
+    {"id": 45, "course_id": 133, "q": "HTTP协议默认端口是多少，有什么特点", "kw": ["80", "无状态"], "expected_file": "计算机网络原理.txt", "note": "细节题：HTTP"},
+    {"id": 46, "course_id": 133, "q": "子网掩码的作用是什么", "kw": ["子网掩码", "网络位", "主机位"], "expected_file": "计算机网络原理.txt", "note": "概念题：子网划分"},
+    {"id": 47, "course_id": 133, "q": "C类私有地址的范围是什么", "kw": ["192.168", "私有"], "expected_file": "计算机网络原理.txt", "note": "细节题：私有地址"},
+    {"id": 48, "course_id": 133, "q": "DNS的作用是什么", "kw": ["域名", "IP", "53"], "expected_file": "计算机网络原理.txt", "note": "概念题：域名解析"}
+  ]
+}

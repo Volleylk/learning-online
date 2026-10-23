@@ -33,9 +33,11 @@ xuecheng-plus-agent/
 │   └── static/                 # 聊天前端页面（HTML/CSS/JS：Markdown 渲染 + 课程卡片 + 历史会话侧栏）
 ├── scripts/
 │   ├── get_token.py            # 生成测试 JWT
-│   └── eval_rag.py             # RAG 检索质量评估（Recall@K，贯穿验证用）
+│   ├── eval_rag.py             # RAG 检索质量评估（Recall@K，贯穿验证用）
+│   └── eval_full.py            # 完整评测：检索指标（rerank on/off）+ Agent 生成质量（LLM-as-Judge）→ docs/rag-eval-report.md
 ├── docs/
-│   └── 对接文档.md             # Java 侧对接说明（JWT 约定 / 讲义链路 / 新接口）
+│   ├── 对接文档.md             # Java 侧对接说明（JWT 约定 / 讲义链路 / 新接口）
+│   └── rag-eval-report.md      # AI 评测报告（scripts/eval_full.py 全量评测自动生成）
 ├── venv/                       # Python 虚拟环境（3.13）
 ├── data/chroma                 # 向量库持久化目录（自动生成）
 ├── start.ps1 / 一键启动.bat    # 一键启动（自动检测端口/进程，打开页面）
@@ -165,3 +167,14 @@ venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - **Markdown 渲染**：内置轻量渲染器（表格/标题/列表/代码块/引用/加粗/行内代码/链接/分隔线），原文先转义再注入白名单标签防 XSS；流式半截表格、未闭合代码块容错渲染
 - **课程卡片**：封面 + 标题（无简介无箭头），排在气泡正下方，点击跳转门户课程详情页；模型正文禁止输出课程网址
 - **历史会话侧栏**：会话列表 + 消息记录，重开会话自动重渲课程卡片
+
+## 十一、AI 评测
+
+- **测试集**：`data/eval_set.json`（6 份演示讲义 × 8 题 = 48 题，跨分类：Java/微服务/高数/数据结构/英语/计网）
+- **评测脚本**：`scripts/eval_full.py`
+  - 检索层：Recall@5 / Precision@5 / MRR / 跨课误召回（rerank on/off 对比）
+  - 生成层：完整 Agent 工具链路回答 + LLM-as-Judge（faithfulness / answer_relevancy）
+  - 断点续跑：每题结果落盘 `data/eval_generations.json`，中断后重跑自动跳过已完成题
+- **报告**：`docs/rag-eval-report.md`（全量评测后自动生成，含指标汇总与逐题明细）
+- **使用**：`venv\Scripts\python scripts\eval_full.py`（全量）；`--limit N`/`--lecture course_id` 局部跑；`--no-judge` 只跑检索指标
+- **裁判模型**：默认 `qwen3.7-max-2026-06-08`（脚本顶部 `JUDGE_MODEL` 可改；失败自动降级 qwen-plus）

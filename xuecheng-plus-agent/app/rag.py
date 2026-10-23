@@ -319,13 +319,22 @@ class RAGService:
     # ------------------------------------------------------------------
     # 检索
     # ------------------------------------------------------------------
-    def search(self, query: str, top_k: Optional[int] = None) -> List[Dict]:
-        """混合检索：向量召回 + BM25 召回 → RRF 融合 → rerank 精排 → 来源去重 → TopN。"""
+    def search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        rerank: Optional[bool] = None,
+    ) -> List[Dict]:
+        """混合检索：向量召回 + BM25 召回 → RRF 融合 → rerank 精排 → 来源去重 → TopN。
+
+        rerank: None=跟随 settings.rag_rerank；True/False=强制开/关（评测 rerank 对比用）。
+        """
         # 入口防御：非字符串/空查询直接返回空，避免 embedding 接口 400
         query = _coerce_query_text(query)
         if not query:
             return []
         top_k = top_k or settings.rag_top_k
+        use_rerank = settings.rag_rerank if rerank is None else bool(rerank)
         # 语料对账：本进程 dirty 或 跨进程 count 变化 → 刷新 BM25
         if self._dirty or self._collection.count() != len(self._corpus_ids):
             self.refresh_corpus()
@@ -420,7 +429,7 @@ class RAGService:
             results = sorted(best.values(), key=lambda x: x["score"], reverse=True)
 
         # 4) rerank 精排（仅真实 Key 时启用；失败内部降级为粗排）
-        if settings.rag_rerank and settings.llm_enabled:
+        if use_rerank and settings.llm_enabled:
             results = self._rerank(query, results)
 
         # 5) 来源去重：同一讲义最多 2 条，保证回答/卡片多样性
@@ -429,7 +438,7 @@ class RAGService:
         log.info(
             "search query=%r top_k=%s 向量命中=%s BM25命中=%s 融合候选=%s 返回=%s rerank=%s 耗时=%.2fs",
             query, top_k, len(vec_ids), len(bm25_ids), len(rrf_score), len(results),
-            settings.rag_rerank, time.perf_counter() - t0,
+            use_rerank, time.perf_counter() - t0,
         )
         return results
 

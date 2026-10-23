@@ -1,0 +1,19 @@
+第1章 动词时态
+1.1 现在完成时：结构为 have/has + 过去分词，表示动作从过去持续到现在，或过去的动作对现在产生影响。标志词包括 since（自从）、for（持续一段时间）、already、yet、just。例如：I have studied English for three years.
+1.2 过去完成时：结构为 had + 过去分词，表示"过去的过去"，即发生在过去某一时间点之前的动作。通常与 by the time、before、when 引导的时间状语连用。例如：By the time I arrived, the train had left.
+1.3 一般过去时与现在完成时的区别：一般过去时只强调过去某个时间发生的动作（常有 yesterday、last week 等明确时间），与现在无关；现在完成时强调对现在的影响或持续到现在，不能与明确过去时间连用。
+
+第2章 虚拟语气
+2.1 与现在事实相反的虚拟条件句：条件从句用过去式（be 动词统一用 were），主句用 would/could/might + 动词原形。例如：If I were you, I would study harder.
+2.2 与过去事实相反的虚拟条件句：条件从句用 had + 过去分词，主句用 would/could/might + have + 过去分词。例如：If I had studied harder, I would have passed the exam.
+2.3 与将来事实可能相反的虚拟条件句：条件从句用 should + 动词原形、were to + 动词原形或过去式，主句用 would + 动词原形。
+
+第3章 被动语态与非谓语动词
+3.1 被动语态：结构为 be + 过去分词，时态由 be 动词体现。当强调动作的承受者而不强调执行者时使用。例如：English is spoken all over the world.
+3.2 动名词与不定式：动名词 doing 常作主语或介词宾语，例如 Reading is important；不定式 to do 常表目的或将来的动作，例如 I want to learn English well。
+3.3 现在分词与过去分词作状语：现在分词 doing 表主动或正在进行，过去分词 done 表被动或已完成。例如：Seeing from the hill, the city is beautiful（主动）；Seen from the hill, the city is beautiful（被动）。
+
+第4章 从句与常用句型
+4.1 定语从句：用关系代词 who（指人）、which（指物）、that（指人或物）、whose（表所属）引导，修饰先行词。例如：The book which I bought yesterday is interesting.
+4.2 常用句型 It is + adj + for sb to do sth：表示"对某人来说做某事是……的"，例如 It is important for us to learn English well。
+4.3 比较级句型 the more..., the more...：表示"越……就越……"，例如 The more you practice, the better you will speak.
