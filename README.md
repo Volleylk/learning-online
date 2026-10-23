@@ -85,8 +85,8 @@ xuecheng-plus-project
 ├── docs                         # 架构与核心链路文档
 └── xuecheng-plus-agent          # AI 学习助手（Python FastAPI，独立 venv）
     ├── app/                     # 源码（auth / agent / rag / memory / tools / routers / static）
-    ├── docs/                    # Agent 对接文档
-    ├── scripts/                 # 运维脚本（一键启动/停止、测试 JWT 生成）
+    ├── docs/                    # Agent 对接文档 + AI 评测报告（rag-eval-report.md）
+    ├── scripts/                 # 运维脚本（一键启动/停止、测试 JWT 生成）+ 完整评测脚本（eval_full.py）
     └── venv/                    # Python 虚拟环境
 ```
 
